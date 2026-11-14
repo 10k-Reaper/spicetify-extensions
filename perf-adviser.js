@@ -1311,6 +1311,7 @@
         mark: markNavigation,
         finalize: finalizeNav,
         clear: clearNav,
+        normRoute: normalizeRoute,
         windowMs: NAV_WINDOW,
       },
     };
@@ -1386,6 +1387,124 @@
       try { if (db) db.close(); } catch (e) { /* ignore */ }
     }
   }
+
+  // ---------------------------------------------------------- selector health
+  // The fixes target Spotify class names that can be renamed in an update. This
+  // registry makes a silent breakage visible: each selector is checked on the
+  // route where it should exist, and last-seen evidence is kept with the Spotify
+  // version. Runs on panel open and once after a route change, never on a timer.
+  const SELECTOR_STORE = "perf-adviser:selector-health";
+  const TRACKLIST_ROUTES = ["/playlist/*", "/album/*", "/artist/*", "/collection/tracks"];
+  const SELECTORS = [
+    { id: "header-topbar", label: "Sticky header surface", sel: ".main-topBar-background", routes: ["*"] },
+    { id: "header-search", label: "Search category header", sel: ".search-searchCategory-SearchCategory", routes: ["/search"] },
+    { id: "header-home-chips", label: "Home filter chips", sel: ".main-home-filterChipsSection", routes: ["/"] },
+    { id: "header-tracklist", label: "Tracklist header", sel: ".main-trackList-trackListHeader", routes: TRACKLIST_ROUTES },
+    { id: "header-tracklist-stuck", label: "Stuck tracklist header", sel: ".main-trackList-trackListHeaderStuck", routes: TRACKLIST_ROUTES, note: "only exists after scrolling the list" },
+    { id: "header-var", label: "--header-filters variable", sel: "--header-filters", kind: "cssvar", routes: ["*"], optional: true, note: "the fix sets it; empty means the theme does not expose it" },
+    { id: "home-page", label: "Home page root", sel: '[data-testid="home-page"]', routes: ["/"] },
+    { id: "card-play", label: "Home card play button", sel: ".main-card-PlayButtonContainer", routes: ["/"] },
+    { id: "cover", label: "Rotating cover art", sel: ".cover-art", routes: ["*"] },
+    { id: "now-playing-bar", label: "Now-playing bar", sel: ".main-nowPlayingBar-nowPlayingBar", routes: ["*"], optional: true },
+    { id: "now-playing-cover", label: "Now-playing cover container", sel: ".main-nowPlayingView-coverArtContainer", routes: ["*"], optional: true },
+    { id: "player-controls", label: "Player controls (peek anchor)", sel: '[data-testid="player-controls"]', routes: ["*"] },
+    { id: "track-peek", label: "track-peek node", sel: ".track-peek", routes: ["*"], requires: "track-peek" },
+    { id: "peek-wrap", label: "track-peek mirror (wrap)", sel: ".perf-adviser-peek-wrap", routes: ["*"], requires: "track-peek", enabled: () => state.runtimePatch },
+    { id: "peek-anchor", label: "track-peek mirror (anchor)", sel: ".perf-adviser-peek-anchor", routes: ["*"], requires: "track-peek", enabled: () => state.runtimePatch },
+  ];
+
+  let lastMarket = null;
+
+  function spotifyVersion() {
+    let version = "";
+    let source = "none";
+    try {
+      const v = Spicetify.Platform && Spicetify.Platform.version;
+      if (v) { version = String(v); source = "Spicetify.Platform.version"; }
+    } catch (e) { /* ignore */ }
+    if (!version) {
+      const m = /Spotify\/([\d.]+)/.exec(navigator.userAgent || "");
+      if (m) { version = m[1]; source = "navigator.userAgent"; }
+    }
+    return { version: version || "unknown", source };
+  }
+
+  function readSelectorStore() {
+    try {
+      const v = JSON.parse(localStorage.getItem(SELECTOR_STORE) || "null");
+      if (v && typeof v === "object") {
+        if (!v.seen || typeof v.seen !== "object") v.seen = {};
+        return v;
+      }
+    } catch (e) { /* ignore */ }
+    return { spotifyVersion: null, seen: {} };
+  }
+
+  function selectorInstalled(name) {
+    if (!lastMarket || !lastMarket.extensions) return true; // unknown, do not claim N/A
+    const re = new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+    return lastMarket.extensions.some((e) => re.test(String(e.key || "")) || re.test(String(e.name || "")));
+  }
+
+  function evaluateSelectorHealth(market) {
+    if (market !== undefined) lastMarket = market;
+    const ver = spotifyVersion();
+    const routeNow = lag.nav.normRoute(route());
+    const stored = readSelectorStore();
+    const previous = stored.spotifyVersion || null;
+    const rows = [];
+    for (const def of SELECTORS) {
+      const routeOk = def.routes.includes("*") || def.routes.includes(routeNow);
+      const available = !def.requires || selectorInstalled(def.requires);
+      const enabled = !def.enabled || def.enabled();
+      let present = false;
+      if (def.kind === "cssvar") {
+        try { present = !!getComputedStyle(document.documentElement).getPropertyValue(def.sel).trim(); } catch (e) { present = false; }
+      } else {
+        try { present = !!document.querySelector(def.sel); } catch (e) { present = false; }
+      }
+      let status;
+      if (!available) {
+        status = "N/A here";
+      } else if (!enabled || !routeOk) {
+        status = "N/A here";
+      } else if (present) {
+        status = "OK";
+        stored.seen[def.id] = { version: ver.version, lastSeen: new Date().toISOString(), route: routeNow };
+      } else if (stored.seen[def.id] && stored.seen[def.id].version !== ver.version) {
+        status = "STALE";
+      } else if (def.optional) {
+        status = "N/A here";
+      } else {
+        status = "NOT SEEN";
+      }
+      rows.push({ ...def, status, present, routeOk, available, enabled });
+    }
+    stored.spotifyVersion = ver.version;
+    stored.versionSource = ver.source;
+    stored.checkedAt = new Date().toISOString();
+    stored.lastRoute = routeNow;
+    try { localStorage.setItem(SELECTOR_STORE, JSON.stringify(stored)); } catch (e) { /* ignore */ }
+    return {
+      version: ver.version,
+      source: ver.source,
+      previous,
+      migrated: !!previous && previous !== ver.version,
+      route: routeNow,
+      rows,
+    };
+  }
+
+  // One-shot after a route change, after the new view has had time to mount.
+  // This is not a polling timer: it schedules once per navigation and only when
+  // a navigation happened.
+  try {
+    if (Spicetify.Platform && Spicetify.Platform.History && Spicetify.Platform.History.listen) {
+      Spicetify.Platform.History.listen(() => {
+        setTimeout(() => { try { evaluateSelectorHealth(); } catch (e) { /* ignore */ } }, 900);
+      });
+    }
+  } catch (e) { /* ignore */ }
 
   function headerBlurOffenders() {
     const out = [];
@@ -1541,11 +1660,13 @@
   async function scan() {
     lag.nav.finalize(false);
     const [market, zoom] = await Promise.all([readMarketplace(), readZoom()]);
+    lastMarket = market;
     const css = cssSources();
     const coverName = coverAnimationName();
     return {
       market,
       zoom,
+      selectorHealth: evaluateSelectorHealth(market),
       route: route(),
       headerBlur: headerBlurOffenders(),
       headerFilterVar: getComputedStyle(document.documentElement).getPropertyValue("--header-filters").trim(),
@@ -1875,6 +1996,13 @@
       lines.push("Route change timing: off");
     }
     if (s.coverSource) lines.push("Cover animation source: " + s.coverSource.name + " (" + s.coverSource.kind + ")");
+    if (s.selectorHealth) {
+      const sh = s.selectorHealth;
+      lines.push("Selector health: Spotify " + sh.version + " (" + sh.source + "), checked on " + sh.route +
+        (sh.migrated ? ", SPOTIFY CHANGED from " + sh.previous : ""));
+      sh.rows.forEach((r) => lines.push("  " + r.status + " - " + r.label + " [" + r.sel + "] expected " +
+        (r.routes.includes("*") ? "any page" : r.routes.join(","))));
+    }
     if (s.animations && s.animations.length) {
       lines.push("Infinite animations: " + s.animations.slice(0, 8).map((a) => a.name + " on " + a.target + " (" + a.state + ")").join(", "));
     }
@@ -1904,6 +2032,12 @@
     head.appendChild(titleWrap);
     head.appendChild(h("span", `font-size:11px;color:${C.sub};`, "no network"));
     root.appendChild(head);
+
+    const health = s.selectorHealth;
+    if (health && health.migrated) {
+      root.appendChild(h("div", `font-size:12px;color:${C.amber};background:rgba(255,164,43,.12);border:1px solid rgba(255,164,43,.35);border-radius:10px;padding:9px 12px;line-height:1.45;`,
+        "Spotify updated to " + health.version + " (last checked on " + health.previous + "). Re-run the scroll test; the Selector health section below shows which class names this version still uses."));
+    }
 
     // score
     const score = h("div", `display:flex;gap:22px;align-items:flex-end;background:${C.card};border-radius:12px;padding:14px 16px;flex-wrap:wrap;`);
@@ -2334,6 +2468,44 @@
     navSec.appendChild(navCard);
     root.appendChild(navSec);
 
+    // ------------------------------------------------ selector health
+    const selSec = section("Selector health");
+    const selCard = h("div", `display:flex;flex-direction:column;gap:10px;background:${C.card};border-radius:12px;padding:12px 14px;`);
+    if (health) {
+      const stale = health.rows.filter((r) => r.status === "STALE");
+      const missing = health.rows.filter((r) => r.status === "NOT SEEN");
+      const topLine = h("div", "display:flex;align-items:center;gap:8px;flex-wrap:wrap;");
+      topLine.appendChild(h("div", `font-size:13px;color:${C.text};`, "Spotify " + health.version));
+      topLine.appendChild(pill(health.source, C.sub));
+      topLine.appendChild(pill(health.rows.filter((r) => r.status === "OK").length + " OK", C.green));
+      if (missing.length) topLine.appendChild(pill(missing.length + " not seen", C.amber));
+      if (stale.length) topLine.appendChild(pill(stale.length + " stale", C.red));
+      selCard.appendChild(topLine);
+      selCard.appendChild(h("div", `font-size:11px;color:${C.sub};line-height:1.45;`,
+        "Checked on " + health.route + " when the panel opened. OK = matched on its expected route; N/A here = wrong route, or the extension that owns it is not installed; NOT SEEN = expected here but not matched yet; STALE = matched on an earlier Spotify version, not on this one."));
+      selCard.appendChild(miniTable(
+        ["item", "selector", "expected", "status"],
+        health.rows.map((r) => [
+          r.label,
+          r.sel.length > 34 ? r.sel.slice(0, 33) + "..." : r.sel,
+          r.routes.includes("*") ? "any page" : r.routes.join(", "),
+          r.status,
+        ])
+      ));
+      if (stale.length) {
+        selCard.appendChild(h("div", `font-size:12px;color:${C.red};line-height:1.45;`,
+          "STALE: " + stale.map((r) => r.label).join(", ") + ". Spotify renamed or removed this class, so the matching fix may now silently do nothing. That is a bug report worth filing, not something this extension can repair by itself."));
+      }
+      if (missing.length) {
+        selCard.appendChild(h("div", `font-size:12px;color:${C.amber};line-height:1.45;`,
+          "NOT SEEN on this route: " + missing.map((r) => r.label).join(", ") + ". If it stays missing on the route named in the Expected column, the fix cannot apply there."));
+      }
+    } else {
+      selCard.appendChild(h("div", `font-size:12px;color:${C.sub};`, "Selector health unavailable."));
+    }
+    selSec.appendChild(selCard);
+    root.appendChild(selSec);
+
     // footer
     const foot = h("details", `font-size:11px;color:${C.sub};line-height:1.5;`);
     foot.appendChild(h("summary", "cursor:pointer;", "How it measures / uninstall"));
@@ -2455,6 +2627,7 @@
         },
       },
       cssEditorChars,
+      selectorHealth: () => evaluateSelectorHealth(lastMarket),
       getState: () => Object.assign({}, state),
       setState(patch) {
         Object.assign(state, patch || {});
