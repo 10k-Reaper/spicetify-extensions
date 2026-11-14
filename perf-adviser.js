@@ -147,6 +147,7 @@
     themeTweaks: false,
     runtimePatch: true,
     cssOff: false,
+    lagRecorder: false,
   };
   function loadState() {
     let stored = {};
@@ -1087,6 +1088,114 @@
     };
   })();
 
+  // ------------------------------------------------------- lag recorder (opt-in)
+  // Records slow frames continuously while on, so a stutter can be explained
+  // afterwards without having started a recording first. One PerformanceObserver,
+  // no timers, no wrappers. Uses long-animation-frame when the build supports it
+  // (that is the only API that says which script ran); otherwise it falls back to
+  // longtask, which has duration but no script attribution.
+  const lag = (() => {
+    const MAX = 30;
+    const types = (window.PerformanceObserver && PerformanceObserver.supportedEntryTypes) || [];
+    const supported = { loaf: types.includes("long-animation-frame"), longtask: types.includes("longtask") };
+    let obs = null;
+    let mode = null;
+    let running = false;
+    let entries = [];
+    let dropped = 0;
+    let lastAt = 0;
+
+    const base = (u) => {
+      u = String(u || "").split("?")[0].split("#")[0];
+      const p = u.split("/");
+      return p[p.length - 1] || u || "?";
+    };
+
+    function normalize(e) {
+      const scripts = (e.scripts || []).map((s) => ({
+        file: base(s.sourceURL || s.invoker || "?"),
+        invoker: String(s.invoker || ""),
+        duration: +(s.duration || 0).toFixed(1),
+        forced: +(s.forcedStyleAndLayoutDuration || 0).toFixed(1),
+      }));
+      return {
+        at: Date.now(),
+        start: +(e.startTime || 0).toFixed(1),
+        duration: +(e.duration || 0).toFixed(1),
+        blocking: +(e.blockingDuration || 0).toFixed(1),
+        styleLayout: +(e.styleAndLayoutStart ? Math.max(0, e.startTime + e.duration - e.styleAndLayoutStart) : 0).toFixed(1),
+        route: route(),
+        scripts,
+      };
+    }
+
+    function push(entry) {
+      lastAt = Date.now();
+      entries.push(entry);
+      while (entries.length > MAX) { entries.shift(); dropped++; }
+    }
+
+    function start() {
+      if (running || !window.PerformanceObserver) return;
+      mode = supported.loaf ? "long-animation-frame" : supported.longtask ? "longtask" : null;
+      if (!mode) return;
+      try {
+        obs = new PerformanceObserver((list) => {
+          for (const e of list.getEntries()) push(normalize(e));
+        });
+        obs.observe({ type: mode });
+        running = true;
+      } catch (e) {
+        try { obs.disconnect(); } catch (e2) { /* ignore */ }
+        obs = null;
+        running = false;
+      }
+    }
+
+    function stop() {
+      if (obs) { try { obs.disconnect(); } catch (e) { /* ignore */ } }
+      obs = null;
+      running = false;
+    }
+
+    // One observer serves the lag recorder and the navigation timer (feature 2).
+    function wanted() {
+      return !!state.lagRecorder;
+    }
+    function sync() {
+      if (wanted()) start(); else stop();
+    }
+
+    function clear() {
+      entries = [];
+      dropped = 0;
+    }
+
+    // Sum of script ms per file over the buffered frames, newest data included.
+    function rollup() {
+      const map = new Map();
+      for (const e of entries) {
+        for (const s of e.scripts) {
+          let r = map.get(s.file);
+          if (!r) { r = { file: s.file, ms: 0, forced: 0, calls: 0 }; map.set(s.file, r); }
+          r.ms += s.duration; r.forced += s.forced; r.calls++;
+        }
+      }
+      return [...map.values()].sort((a, b) => b.ms - a.ms);
+    }
+
+    return {
+      supported,
+      get running() { return running; },
+      get mode() { return mode; },
+      get entries() { return entries; },
+      get dropped() { return dropped; },
+      get lastAt() { return lastAt; },
+      start, stop, sync, clear, rollup,
+    };
+  })();
+  lag.sync();
+
   // ---------------------------------------------------------------- environment
   function timeout(promise, ms, fallback) {
     return Promise.race([promise, sleep(ms).then(() => fallback)]);
@@ -1613,6 +1722,17 @@
     } else {
       lines.push("Marketplace data: unavailable");
     }
+    lines.push("Slow-frame recorder: " + (state.lagRecorder ? "on (" + (lag.mode || "unsupported") + ")" : "off") +
+      ", " + lag.entries.length + " frame(s) buffered" + (lag.dropped ? ", " + lag.dropped + " dropped" : ""));
+    lag.entries.slice().reverse().slice(0, 10).forEach((e) => {
+      const top = e.scripts.slice().sort((a, b) => b.duration - a.duration)[0];
+      lines.push("  " + e.route + " frame " + e.duration + " ms, blocking " + e.blocking + " ms, " +
+        (top ? top.file + " " + top.duration + " ms" : "no script attribution"));
+    });
+    const lagRoll = lag.rollup().slice(0, 8);
+    if (lagRoll.length) {
+      lines.push("  by source: " + lagRoll.map((x) => x.file + " " + x.ms.toFixed(1) + " ms/" + x.calls).join(", "));
+    }
     if (s.coverSource) lines.push("Cover animation source: " + s.coverSource.name + " (" + s.coverSource.kind + ")");
     if (s.animations && s.animations.length) {
       lines.push("Infinite animations: " + s.animations.slice(0, 8).map((a) => a.name + " on " + a.target + " (" + a.state + ")").join(", "));
@@ -1957,6 +2077,70 @@
     profile.appendChild(pCard);
     root.appendChild(profile);
 
+    // ------------------------------------------------ what just lagged? (opt-in)
+    const lagSec = section("What just lagged?");
+    const lagCard = h("div", `display:flex;flex-direction:column;gap:10px;background:${C.card};border-radius:12px;padding:12px 14px;`);
+    const lagTop = h("div", "display:flex;align-items:center;gap:12px;justify-content:space-between;flex-wrap:wrap;");
+    const lagText = h("div", "display:flex;flex-direction:column;gap:3px;flex:1 1 340px;min-width:260px;");
+    const lagTitle = h("div", "display:flex;align-items:center;gap:8px;flex-wrap:wrap;");
+    lagTitle.appendChild(h("div", `font-size:13px;color:${C.text};`, "Slow-frame recorder"));
+    lagTitle.appendChild(pill(state.lagRecorder ? "on" : "off", state.lagRecorder ? C.green : C.sub));
+    if (state.lagRecorder) {
+      lagTitle.appendChild(pill(lag.mode === "long-animation-frame" ? "script attribution" : lag.mode || "unsupported",
+        lag.mode === "long-animation-frame" ? C.green : C.amber));
+    }
+    lagText.appendChild(lagTitle);
+    lagText.appendChild(h("div", `font-size:12px;color:${C.sub};line-height:1.45;`,
+      !state.lagRecorder
+        ? "Off. Turn it on before the stutter, then come back here: it keeps the last 30 slow frames with the script file and blocking time for each. In-memory only, no timers, no wrappers, no network."
+        : lag.mode === "long-animation-frame"
+          ? "On. Newest slow frames first. Clicking anything in Spotify's own UI during the frame can appear as the invoker even when the cost is in another file; read the file column first."
+          : lag.mode === "longtask"
+            ? "On, but this Spotify build only supports longtask entries: you get duration and the blocking window, not which script ran. Turn it off when you are done."
+            : "On, but this build supports neither long-animation-frame nor longtask, so nothing can be recorded."));
+    lagTop.appendChild(lagText);
+    lagTop.appendChild(btn(state.lagRecorder ? "Turn off" : "Turn on", () => {
+      state.lagRecorder = !state.lagRecorder;
+      saveState(state);
+      lag.sync();
+      notify(state.lagRecorder ? "Perf Adviser: recording slow frames" : "Perf Adviser: slow-frame recorder off");
+      refresh();
+    }, !state.lagRecorder));
+    lagCard.appendChild(lagTop);
+
+    if (state.lagRecorder) {
+      const recent = lag.entries.slice().reverse().slice(0, 10);
+      lagCard.appendChild(h("div", `font-size:11px;color:${C.sub};`, "Slow frames (newest first)" + (lag.dropped ? " - " + lag.dropped + " older dropped" : "")));
+      lagCard.appendChild(miniTable(
+        ["ago", "frame ms", "blocking", "route", "top script"],
+        recent.map((e) => {
+          const top = e.scripts.slice().sort((a, b) => b.duration - a.duration)[0];
+          return [
+            Math.max(0, Math.round((Date.now() - e.at) / 1000)) + "s",
+            e.duration,
+            e.blocking,
+            e.route || "/",
+            top ? top.file + " " + top.duration + " ms" : "(no attribution)",
+          ];
+        })
+      ));
+      const roll = lag.rollup().slice(0, 8);
+      if (roll.length) {
+        lagCard.appendChild(h("div", `font-size:11px;color:${C.sub};margin-top:4px;`, "By source (sum of script ms in the buffer)"));
+        lagCard.appendChild(miniTable(
+          ["file", "script ms", "forced ms", "entries"],
+          roll.map((x) => [x.file, +x.ms.toFixed(1), +x.forced.toFixed(1), x.calls])
+        ));
+      }
+      const lagBtns = h("div", "display:flex;gap:8px;justify-content:flex-end;");
+      lagBtns.appendChild(btn("Clear", () => { lag.clear(); refresh(); }));
+      lagCard.appendChild(lagBtns);
+    } else {
+      lagCard.appendChild(h("div", `font-size:12px;color:${C.sub};`, "Nothing is being observed. Idle cost while off is zero: no observer, no timer."));
+    }
+    lagSec.appendChild(lagCard);
+    root.appendChild(lagSec);
+
     // footer
     const foot = h("details", `font-size:11px;color:${C.sub};line-height:1.5;`);
     foot.appendChild(h("summary", "cursor:pointer;", "How it measures / uninstall"));
@@ -2059,6 +2243,16 @@
       scan,
       benchmark,
       profile: { start: prof.start, stop: prof.stop, report: prof.report, get recording() { return prof.recording; } },
+      lag: {
+        supported: lag.supported,
+        get running() { return lag.running; },
+        get mode() { return lag.mode; },
+        get entries() { return lag.entries; },
+        start: lag.start,
+        stop: lag.stop,
+        clear: lag.clear,
+        rollup: lag.rollup,
+      },
       cssEditorChars,
       getState: () => Object.assign({}, state),
       setState(patch) {
@@ -2066,6 +2260,7 @@
         saveState(state);
         applyInjectedFixes();
         syncRuntimePatches();
+        lag.sync();
         return Object.assign({}, state);
       },
       patchInfo: () => ({
