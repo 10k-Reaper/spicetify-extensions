@@ -149,6 +149,7 @@
     cssOff: false,
     lagRecorder: false,
     navTiming: false,
+    authorMode: false,
   };
   function loadState() {
     let stored = {};
@@ -161,6 +162,166 @@
     try { localStorage.setItem(STATE_KEY, JSON.stringify(s)); } catch (e) { /* ignore */ }
   }
   const state = loadState();
+
+  // ---------------------------------------------------- author mode (opt-in)
+  // A registration inventory for extension authors: it records who registered
+  // an interval, a MutationObserver (target + options) and listeners for hot
+  // events, with stack attribution at registration time. Nothing is timed while
+  // idle. During an author check the same wrappers time those callbacks, which
+  // is the only way to time handlers an extension registered at startup (the
+  // profiler can only time registrations made after it starts).
+  // It is installed at load, so it can only see extensions loaded after this
+  // one - Perf Adviser must be first in the extensions list. Off by default.
+  const author = (() => {
+    const enabled = !!state.authorMode;
+    const HOT = new Set(["scroll", "wheel", "mousewheel", "mousemove", "mouseover", "pointermove", "pointerover", "touchmove", "touchstart", "resize"]);
+    const INFRA = new Set(["perf-adviser.js", "spicetifyWrapper.js"]);
+    const CORE_RE = /^(vendor[~-])?xpui[\w.~-]*\.js$/i;
+    const URL_RE = /((?:https?|file|spotify):\/\/[^\s)]+?|blob:[^\s)]+?):\d+:\d+/;
+    const MAX_DETAILS = 80;
+    const map = new Map();
+    const timed = new Map();
+    let registrations = 0;
+    let loadMs = 0;
+    let collecting = false;
+
+    function noteTime(src, kind, ms) {
+      let t = timed.get(src);
+      if (!t) { t = { ms: 0, calls: 0, kinds: {} }; timed.set(src, t); }
+      t.ms += ms; t.calls++;
+      const k = t.kinds[kind] || (t.kinds[kind] = { calls: 0, ms: 0 });
+      k.calls++; k.ms += ms;
+    }
+    // The check that runs the wrapper only reads a boolean when idle; timing
+    // starts when an author check asks for it.
+    function wrapTimed(fn, src, kind) {
+      return function pa_author_cb() {
+        if (!collecting) return fn.apply(this, arguments);
+        const t = performance.now();
+        try { return fn.apply(this, arguments); }
+        finally { noteTime(src, kind, performance.now() - t); }
+      };
+    }
+
+    const base = (u) => {
+      const p = String(u).split("?")[0].split("#")[0].split("/");
+      return p[p.length - 1] || String(u);
+    };
+    function sourceOf() {
+      let stack = "";
+      try { stack = new Error().stack || ""; } catch (e) { return "(unknown)"; }
+      for (const line of stack.split("\n").slice(1)) {
+        if (/perf-adviser\.js|pa_/.test(line)) continue;
+        const m = URL_RE.exec(line);
+        if (!m) continue;
+        const label = base(m[1]);
+        if (INFRA.has(label) || CORE_RE.test(label)) continue;
+        return label;
+      }
+      return "(unknown)";
+    }
+    function describeTarget(t) {
+      if (t === document) return "document";
+      if (t === document.body) return "body";
+      if (t === document.documentElement) return "documentElement";
+      if (!t || t.nodeType !== 1) return String(t);
+      return t.tagName.toLowerCase() + (t.id ? "#" + t.id : "");
+    }
+    function entry(src) {
+      let e = map.get(src);
+      if (!e) { e = { source: src, intervals: [], observers: [], listeners: [] }; map.set(src, e); }
+      return e;
+    }
+    function add(src, kind, detail) {
+      if (!enabled) return;
+      const e = entry(src);
+      if (e[kind].length < MAX_DETAILS) e[kind].push(detail);
+    }
+
+    if (enabled) {
+      try {
+        const origSetInterval = window.setInterval;
+        window.setInterval = function pa_author_interval(fn, ms) {
+          const t = performance.now();
+          let src = "(unknown)";
+          let args = arguments;
+          try {
+            src = sourceOf();
+            add(src, "intervals", { at: Date.now(), ms: +ms || 0 });
+            if (typeof fn === "function") {
+              args = Array.prototype.slice.call(arguments);
+              args[0] = wrapTimed(fn, src, "interval");
+            }
+          } catch (e) { /* ignore */ }
+          loadMs += performance.now() - t;
+          registrations++;
+          return origSetInterval.apply(window, args);
+        };
+      } catch (e) { /* ignore */ }
+
+      try {
+        const NativeMO = window.MutationObserver;
+        class AuthorMO extends NativeMO {
+          constructor(cb) {
+            const src = sourceOf();
+            super(typeof cb === "function" ? wrapTimed(cb, src, "observer") : cb);
+            this.__paAuthorSrc = src;
+          }
+          observe(target, options) {
+            const t = performance.now();
+            try {
+              const opts = options || {};
+              add(this.__paAuthorSrc || "(unknown)", "observers", {
+                at: Date.now(),
+                target: describeTarget(target),
+                subtree: !!opts.subtree,
+                attributes: !!opts.attributes,
+                childList: !!opts.childList,
+                filter: Array.isArray(opts.attributeFilter) ? opts.attributeFilter.slice(0, 6) : null,
+                broad: !!opts.subtree && (target === document || target === document.body || target === document.documentElement),
+                attrNoFilter: !!opts.attributes && !opts.attributeFilter,
+              });
+            } catch (e) { /* ignore */ }
+            loadMs += performance.now() - t;
+            registrations++;
+            return super.observe(target, options);
+          }
+        }
+        window.MutationObserver = AuthorMO;
+      } catch (e) { /* ignore */ }
+
+      try {
+        const origAdd = EventTarget.prototype.addEventListener;
+        EventTarget.prototype.addEventListener = function pa_author_add(type, listener, options) {
+          if (HOT.has(type) && (typeof listener === "function" || (listener && typeof listener === "object"))) {
+            const t = performance.now();
+            let src = "(unknown)";
+            let wrapped = listener;
+            try {
+              src = sourceOf();
+              add(src, "listeners", { at: Date.now(), type, target: describeTarget(this), capture: !!(options && (options === true || options.capture)) });
+              if (typeof listener === "function") wrapped = wrapTimed(listener, src, "listener:" + type);
+            } catch (e) { /* ignore */ }
+            loadMs += performance.now() - t;
+            registrations++;
+            return origAdd.call(this, type, wrapped, options);
+          }
+          return origAdd.call(this, type, listener, options);
+        };
+      } catch (e) { /* ignore */ }
+    }
+
+    return {
+      enabled,
+      get collecting() { return collecting; },
+      setCollecting(v) { collecting = !!v; if (!collecting) { /* keep the last run's numbers */ } },
+      resetTimings() { timed.clear(); },
+      timings: (src) => timed.get(src) || null,
+      inventory: () => [...map.values()],
+      describe: describeTarget,
+      get stats() { return { registrations, loadMs: +loadMs.toFixed(2) }; },
+    };
+  })();
 
   function activeBlocks() {
     if (state.cssOff) return [];
@@ -886,6 +1047,16 @@
     // ------------------------------------------------------------ patch/unpatch
     function patch() {
       if (!recording) return;
+      // Restore whatever was in place when the recording started, not the
+      // natives captured at load: Author mode may have installed wrappers that
+      // must survive a recording.
+      const prev = {
+        setInterval: window.setInterval,
+        setTimeout: window.setTimeout,
+        raf: window.requestAnimationFrame,
+        MO: window.MutationObserver,
+        add: EventTarget.prototype.addEventListener,
+      };
       window.setInterval = function pa_setInterval(fn) {
         const args = Array.prototype.slice.call(arguments);
         try {
@@ -897,7 +1068,7 @@
         } catch (e) { /* ignore */ }
         return orig.setInterval.apply(window, args);
       };
-      undo.push(() => { window.setInterval = orig.setInterval; });
+      undo.push(() => { window.setInterval = prev.setInterval; });
 
       window.setTimeout = function pa_setTimeout(fn) {
         const args = Array.prototype.slice.call(arguments);
@@ -909,7 +1080,7 @@
         } catch (e) { /* ignore */ }
         return orig.setTimeout.apply(window, args);
       };
-      undo.push(() => { window.setTimeout = orig.setTimeout; });
+      undo.push(() => { window.setTimeout = prev.setTimeout; });
 
       window.requestAnimationFrame = function pa_raf(fn) {
         try {
@@ -920,7 +1091,7 @@
         } catch (e) { /* ignore */ }
         return orig.raf.call(window, fn);
       };
-      undo.push(() => { window.requestAnimationFrame = orig.raf; });
+      undo.push(() => { window.requestAnimationFrame = prev.raf; });
 
       EventTarget.prototype.addEventListener = function pa_add(type, listener, options) {
         try {
@@ -935,7 +1106,7 @@
         } catch (e) { /* fall through */ }
         return orig.add.call(this, type, listener, options);
       };
-      undo.push(() => { EventTarget.prototype.addEventListener = orig.add; });
+      undo.push(() => { EventTarget.prototype.addEventListener = prev.add; });
 
       // MutationObserver: attribute callback time to whoever created the observer.
       class PaMO extends orig.MO {
@@ -944,11 +1115,11 @@
           try { src = activeSource || attribute(); } catch (e) { /* ignore */ }
           const wrapped = function (records, obs) {
             if (!recording || src === CORE) return cb.call(obs, records, obs);
-            const prev = activeSource;
+            const prevSrc = activeSource;
             activeSource = src;
             const t = performance.now();
             try { return cb.call(obs, records, obs); }
-            finally { activeSource = prev; rec(src, "observer", performance.now() - t); }
+            finally { activeSource = prevSrc; rec(src, "observer", performance.now() - t); }
           };
           super(typeof cb === "function" ? wrapped : cb);
           this.__paSrc = src;
@@ -965,7 +1136,7 @@
         }
       }
       window.MutationObserver = PaMO;
-      undo.push(() => { window.MutationObserver = orig.MO; });
+      undo.push(() => { window.MutationObserver = prev.MO; });
     }
 
     function startObservers() {
@@ -1056,6 +1227,7 @@
             forcedMs: +s.forcedMs.toFixed(1),
             forcedCount: s.forcedCount,
             forcedBy: topProps(s.forcedProps),
+            intervalCalls: (s.kinds.interval && s.kinds.interval.count) || 0,
           })),
         inventory: [...inventory.values()].sort((a, b) =>
           (b.interval + b.observer + b.listener) - (a.interval + a.observer + a.listener)),
@@ -1776,6 +1948,118 @@
   // ---------------------------------------------------------------- panel
   let last = null;
   let busy = false;
+  let authorPick = null;
+  let authorCheck = null;
+
+  // Thresholds are deliberately explicit so the README can quote the same
+  // numbers. They are calibrated from measured extensions on one machine; see
+  // docs/MEASUREMENTS.md. They are heuristics, not a certification.
+  const AUTHOR = {
+    forcedMs: 2,
+    scrollMs: 6000,
+    idleMs: 3000,
+    callbackMsPerSec: { pass: 8, warn: 25 },
+    intervalsPerSec: { pass: 2, warn: 10 },
+  };
+
+  function evaluateAuthor(source, p, scroll) {
+    const checks = [];
+    const inv = author.inventory().find((x) => x.source === source) || null;
+    const src = p && p.sources ? p.sources.find((x) => x.source === source) : null;
+    const own = author.timings(source);
+    const secs = p ? Math.max(0.001, p.recordedMs / 1000) : 0;
+    const add = (id, label, result, evidence) => checks.push({ id, label, result, evidence });
+
+    const broad = inv ? inv.observers.filter((o) => o.broad) : [];
+    const attr = inv ? inv.observers.filter((o) => o.attrNoFilter) : [];
+    if (!author.enabled) {
+      add("observers", "No broad subtree observers", "WARN",
+        "Author mode was off at load, so observers registered at startup are invisible. Timing-only evidence below still applies.");
+    } else if (!inv) {
+      add("observers", "No broad subtree observers", "WARN",
+        "No registrations recorded for this source. It may have loaded before Perf Adviser or registered nothing.");
+    } else if (broad.length) {
+      add("observers", "No broad subtree observers", "FAIL",
+        broad.map((o) => o.target + (o.childList ? " childList" : "") + (o.attributes ? " attributes" + (o.filter ? "[" + o.filter.join(",") + "]" : " (no filter)") : "")).join("; "));
+    } else if (attr.length) {
+      add("observers", "No broad subtree observers", "WARN",
+        attr.length + " attribute observer(s) without attributeFilter: " + attr.map((o) => o.target).join(", "));
+    } else {
+      add("observers", "No broad subtree observers", "PASS",
+        inv.observers.length + " observer(s), none on document/body/documentElement with subtree.");
+    }
+
+    const forced = src ? src.forcedCount || 0 : 0;
+    add("forced", "No forced layout/style read over " + AUTHOR.forcedMs + " ms", forced ? "FAIL" : "PASS",
+      forced ? forced + " read(s), " + src.forcedMs + " ms total (" + (src.forcedBy || "unknown") + ")" :
+        "none over the " + AUTHOR.forcedMs + " ms threshold during the standard test");
+
+    const rate = +((own ? own.ms : src ? src.totalMs : 0) / secs).toFixed(2);
+    const timedBy = own ? "timed by the Author mode wrappers, which is the only way to see handlers registered at startup" : "timed by the profiler, so startup handlers are not included";
+    add("callback", "Callback time per second of test", rate > AUTHOR.callbackMsPerSec.warn ? "FAIL" : rate > AUTHOR.callbackMsPerSec.pass ? "WARN" : "PASS",
+      rate + " ms/s (" + timedBy + "); pass < " + AUTHOR.callbackMsPerSec.pass + ", warn " + AUTHOR.callbackMsPerSec.pass + "-" + AUTHOR.callbackMsPerSec.warn + ", fail > " + AUTHOR.callbackMsPerSec.warn + " over " + secs.toFixed(1) + " s");
+
+    const intervalCalls = own && own.kinds.interval ? own.kinds.interval.calls : src ? src.intervalCalls || 0 : 0;
+    const intRate = +(intervalCalls / secs).toFixed(2);
+    add("intervals", "Interval callback rate", intRate > AUTHOR.intervalsPerSec.warn ? "FAIL" : intRate > AUTHOR.intervalsPerSec.pass ? "WARN" : "PASS",
+      intRate + "/s measured" + (inv ? " (" + inv.intervals.length + " registered from this source)" : "") +
+      " (pass <= " + AUTHOR.intervalsPerSec.pass + ", warn <= " + AUTHOR.intervalsPerSec.warn + ", fail above)");
+
+    const overall = checks.some((c) => c.result === "FAIL") ? "fail" : checks.some((c) => c.result === "WARN") ? "warn" : "pass";
+    return {
+      at: new Date().toISOString(),
+      source,
+      route: lag.nav.normRoute(route()),
+      conditions: { scrollMs: AUTHOR.scrollMs, idleMs: AUTHOR.idleMs, homeOnly: true },
+      scroll: scroll || null,
+      overall,
+      checks,
+      thresholds: AUTHOR,
+      authorMode: author.enabled,
+      authorStats: author.stats,
+      inventory: inv,
+      profile: p ? {
+        recordedMs: p.recordedMs,
+        source: src,
+        fps: p.fps,
+        longTasks: p.longTasks,
+      } : null,
+      authorTimings: own ? {
+        calls: own.calls,
+        ms: +own.ms.toFixed(2),
+        kinds: Object.fromEntries(Object.entries(own.kinds).map(([k, v]) => [k, { calls: v.calls, ms: +v.ms.toFixed(2) }])),
+      } : null,
+    };
+  }
+
+  async function runAuthorCheck(source) {
+    if (busy) { notify("Perf Adviser is already measuring"); return; }
+    if (!author.enabled) { notify("Perf Adviser: turn on Author mode and reload first", true); return; }
+    if (lag.nav.normRoute(route()) !== "/") { notify("Perf Adviser: open Home before the author check", true); return; }
+    if (!source) { notify("Perf Adviser: pick a source first", true); return; }
+    busy = true;
+    try { Spicetify.PopupModal.hide(); } catch (e) { /* ignore */ }
+    notify("Perf Adviser: author check - scrolling Home for " + (AUTHOR.scrollMs / 1000) + " s, then " + (AUTHOR.idleMs / 1000) + " s idle");
+    await sleep(500);
+    author.resetTimings();
+    author.setCollecting(true);
+    let p = null;
+    let scroll = null;
+    try {
+      prof.start();
+      scroll = await measureOnce(AUTHOR.scrollMs);
+      await sleep(AUTHOR.idleMs);
+    } finally {
+      p = prof.stop();
+      author.setCollecting(false);
+    }
+    const s = await scan();
+    last = { scan: s, bench: last ? last.bench : null, prof: last ? last.prof : null };
+    authorCheck = evaluateAuthor(source, p, scroll);
+    busy = false;
+    showPanel();
+    return authorCheck;
+  }
 
   function section(title) {
     const wrap = h("div", "display:flex;flex-direction:column;gap:8px;");
@@ -2002,6 +2286,14 @@
         (sh.migrated ? ", SPOTIFY CHANGED from " + sh.previous : ""));
       sh.rows.forEach((r) => lines.push("  " + r.status + " - " + r.label + " [" + r.sel + "] expected " +
         (r.routes.includes("*") ? "any page" : r.routes.join(","))));
+    }
+    if (authorCheck) {
+      lines.push("Author check: " + authorCheck.overall.toUpperCase() + " for " + authorCheck.source +
+        " (" + authorCheck.route + ", " + authorCheck.at + ", author mode " + (authorCheck.authorMode ? "on" : "off") + ")");
+      authorCheck.checks.forEach((c) => lines.push("  [" + c.result + "] " + c.label + " - " + c.evidence));
+      lines.push("  thresholds: forced > " + authorCheck.thresholds.forcedMs + " ms fails; callback " +
+        authorCheck.thresholds.callbackMsPerSec.pass + "/" + authorCheck.thresholds.callbackMsPerSec.warn +
+        " ms/s; intervals " + authorCheck.thresholds.intervalsPerSec.pass + "/" + authorCheck.thresholds.intervalsPerSec.warn + " per second");
     }
     if (s.animations && s.animations.length) {
       lines.push("Infinite animations: " + s.animations.slice(0, 8).map((a) => a.name + " on " + a.target + " (" + a.state + ")").join(", "));
@@ -2506,6 +2798,99 @@
     selSec.appendChild(selCard);
     root.appendChild(selSec);
 
+    // ------------------------------------------------ author check (heuristic)
+    const aSec = section("Author check (heuristic)");
+    const aCard = h("div", `display:flex;flex-direction:column;gap:10px;background:${C.card};border-radius:12px;padding:12px 14px;`);
+    const aTop = h("div", "display:flex;align-items:center;gap:12px;justify-content:space-between;flex-wrap:wrap;");
+    const aText = h("div", "display:flex;flex-direction:column;gap:3px;flex:1 1 340px;min-width:260px;");
+    const aTitle = h("div", "display:flex;align-items:center;gap:8px;flex-wrap:wrap;");
+    aTitle.appendChild(h("div", `font-size:13px;color:${C.text};`, "Extension author check"));
+    aTitle.appendChild(pill(author.enabled ? "author mode on" : "author mode off", author.enabled ? C.green : C.sub));
+    aText.appendChild(aTitle);
+    aText.appendChild(h("div", `font-size:12px;color:${C.sub};line-height:1.45;`,
+      "A fixed Home scroll (" + (AUTHOR.scrollMs / 1000) + " s) plus " + (AUTHOR.idleMs / 1000) + " s idle, then PASS/WARN/FAIL for broad observers, forced reads over " +
+      AUTHOR.forcedMs + " ms and callback/interval rates. Heuristic, one machine, not a Spicetify or Marketplace certification. " +
+      "Author mode records who registered an interval, a MutationObserver (target and options) and hot listeners; during a check it also times those callbacks, including ones registered at startup. Nothing is timed while idle. It only sees extensions loaded after Perf Adviser."));
+    aTop.appendChild(aText);
+    if (!state.authorMode && !author.enabled) {
+      aTop.appendChild(btn("Turn on Author mode", () => {
+        state.authorMode = true;
+        saveState(state);
+        notify("Perf Adviser: Author mode saved - reload Spotify to install the inventory");
+        refresh();
+      }, true));
+    } else if (state.authorMode && !author.enabled) {
+      aTop.appendChild(pill("saved - reload Spotify", C.amber));
+    } else if (author.enabled) {
+      aTop.appendChild(btn("Turn off (reload)", () => {
+        state.authorMode = false;
+        saveState(state);
+        notify("Perf Adviser: Author mode off - reload Spotify to remove the inventory");
+        refresh();
+      }));
+    }
+    aCard.appendChild(aTop);
+
+    aCard.appendChild(h("div", `font-size:11px;color:${C.sub};`,
+      "Author mode idle cost: " + author.stats.registrations + " registration(s), " + author.stats.loadMs + " ms of one-off wrapper time at load; while idle each wrapped callback only pays one boolean check, and nothing is timed until a check runs."));
+
+    if (author.enabled) {
+      const srcSet = new Set();
+      for (const i of author.inventory()) srcSet.add(i.source);
+      const pr = (last && last.prof) || prof.report();
+      if (pr && pr.sources) for (const x of pr.sources) srcSet.add(x.source);
+      const candidates = [...srcSet]
+        .filter((x) => !/^(spotify-core|\(unknown\)|\(anonymous\/eval\)|spicetifyWrapper\.js|perf-adviser\.js)$/.test(x))
+        .sort();
+      if (!authorPick || !candidates.includes(authorPick)) authorPick = candidates[0] || null;
+
+      if (candidates.length) {
+        const pickRow = h("div", "display:flex;align-items:center;gap:8px;flex-wrap:wrap;");
+        const sel = document.createElement("select");
+        sel.style.cssText = `background:#1f1f1f;color:${C.text};border:1px solid rgba(128,128,128,.5);border-radius:8px;padding:6px 8px;font-size:12px;max-width:320px;`;
+        for (const c of candidates) {
+          const opt = document.createElement("option");
+          opt.value = c; opt.textContent = c;
+          if (c === authorPick) opt.selected = true;
+          sel.appendChild(opt);
+        }
+        sel.addEventListener("change", () => { authorPick = sel.value; });
+        pickRow.appendChild(h("span", `font-size:12px;color:${C.sub};`, "Source"));
+        pickRow.appendChild(sel);
+        pickRow.appendChild(btn("Run standard test", () => runAuthorCheck(authorPick), true));
+        aCard.appendChild(pickRow);
+      } else {
+        aCard.appendChild(h("div", `font-size:12px;color:${C.sub};`, "No sources registered yet. Reload with Author mode on, or record a profile first."));
+      }
+
+      if (authorCheck) {
+        const ac = authorCheck;
+        const color = ac.overall === "pass" ? C.green : ac.overall === "warn" ? C.amber : C.red;
+        const sum = h("div", "display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px solid rgba(128,128,128,.18);padding-top:8px;");
+        sum.appendChild(h("div", `font-size:13px;color:${C.text};`, "Result for " + ac.source));
+        sum.appendChild(pill(ac.overall.toUpperCase(), color));
+        sum.appendChild(h("span", `font-size:11px;color:${C.sub};`, ac.at.slice(0, 19).replace("T", " ") + " on " + ac.route));
+        aCard.appendChild(sum);
+        aCard.appendChild(miniTable(
+          ["check", "result", "evidence"],
+          ac.checks.map((c) => [c.label, c.result, c.evidence])
+        ));
+        aCard.appendChild(h("div", `font-size:11px;color:${C.sub};line-height:1.45;`,
+          "Thresholds: callback pass < " + AUTHOR.callbackMsPerSec.pass + " ms/s, fail > " + AUTHOR.callbackMsPerSec.warn +
+          " ms/s; intervals pass <= " + AUTHOR.intervalsPerSec.pass + "/s, fail > " + AUTHOR.intervalsPerSec.warn +
+          "/s; any forced read > " + AUTHOR.forcedMs + " ms fails; any subtree observer on document/body/documentElement fails. " +
+          "One machine, one theme, synthetic scroll: treat this as a debugging aid, not a guarantee."));
+        const aBtns = h("div", "display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;");
+        aBtns.appendChild(btn("Copy JSON", () => copyText(JSON.stringify(ac, null, 2))));
+        aBtns.appendChild(btn("Copy badge line", () => copyText("Perf Adviser check: " + ac.overall.toUpperCase() + " - " + ac.source + " - " + ac.at.slice(0, 10) + " (heuristic, one machine)")));
+        aCard.appendChild(aBtns);
+      }
+    } else {
+      aCard.appendChild(h("div", `font-size:12px;color:${C.sub};`, "Timing-only results still work without Author mode; startup observers and intervals are invisible until it is on and Spotify is reloaded."));
+    }
+    aSec.appendChild(aCard);
+    root.appendChild(aSec);
+
     // footer
     const foot = h("details", `font-size:11px;color:${C.sub};line-height:1.5;`);
     foot.appendChild(h("summary", "cursor:pointer;", "How it measures / uninstall"));
@@ -2625,6 +3010,19 @@
           finalize: lag.nav.finalize,
           clear: lag.nav.clear,
         },
+      },
+      author: {
+        // enabled is what the running build installed at load; saved is the
+        // toggle. They differ between pressing the toggle and reloading.
+        get mode() { return author.enabled; },
+        get saved() { return state.authorMode; },
+        get stats() { return author.stats; },
+        inventory: () => author.inventory(),
+        timings: (src) => author.timings(src),
+        get result() { return authorCheck; },
+        run: (src) => runAuthorCheck(src || authorPick),
+        evaluate: (src, profile, scroll) => evaluateAuthor(src, profile, scroll),
+        thresholds: AUTHOR,
       },
       cssEditorChars,
       selectorHealth: () => evaluateSelectorHealth(lastMarket),
