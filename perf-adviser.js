@@ -1,4 +1,4 @@
-// perf-adviser.js - in-app performance adviser for this Spotify + Spicetify setup.
+﻿// perf-adviser.js - in-app performance adviser for this Spotify + Spicetify setup.
 //
 // What it does
 //   - injects two measured, individually switchable fixes (the recommended set):
@@ -1932,8 +1932,12 @@
       if (i < runs - 1) await sleep(1200);
     }
     if (!rows.length) return null;
+    const med = median(rows.map((r) => r.fps));
+    const mad = median(rows.map((r) => Math.abs(r.fps - med)));
     return {
-      fps: +median(rows.map((r) => r.fps)).toFixed(1),
+      fps: +med.toFixed(1),
+      mad: +mad.toFixed(2),
+      samples: rows.map((r) => +r.fps.toFixed(1)),
       p95: +median(rows.map((r) => r.p95)).toFixed(1),
       slowPct: +median(rows.map((r) => r.slowPct)).toFixed(1),
       longTaskCount: median(rows.map((r) => r.longTaskCount)),
@@ -1950,6 +1954,101 @@
   let busy = false;
   let authorPick = null;
   let authorCheck = null;
+  let panelView = "report";
+
+  function switchPanelView(view) {
+    if (view === panelView) return;
+    panelView = view;
+    showPanel();
+  }
+
+  function buildBisectPanel(bBody, s) {
+    const sec = section("Guided bisect");
+    const card = h("div", `display:flex;flex-direction:column;gap:10px;background:${C.card};border-radius:12px;padding:12px 14px;`);
+
+    const top = h("div", "display:flex;align-items:center;gap:8px;flex-wrap:wrap;");
+    top.appendChild(h("div", `font-size:13px;color:${C.text};`, "Find which extension costs frame time"));
+    if (bisect) {
+      const label = bisect.phase === "done" ? bisect.status : bisect.phase;
+      const color = bisect.status === "found" ? C.green : bisect.status === "inconclusive" ? C.amber : C.blue;
+      top.appendChild(pill(label, color));
+    }
+    card.appendChild(top);
+    card.appendChild(h("div", `font-size:12px;color:${C.sub};line-height:1.45;`,
+      "This panel never turns an extension on or off. It says which half to toggle, you apply that in Marketplace -> Installed, reload, and measure. Each change is compared with a noise band measured by two identical runs, so a difference smaller than that is never called a result."));
+
+    if (!bisect) {
+      const names = extensionNames(s);
+      card.appendChild(h("div", `font-size:12px;color:${C.text};line-height:1.45;`,
+        names.length + " extension(s) in the list" + (names.length ? ": " + names.join(", ") : ".") +
+        " Perf Adviser itself is excluded."));
+      if (names.length < 2) {
+        card.appendChild(h("div", `font-size:12px;color:${C.amber};line-height:1.45;`,
+          "At least two other extensions are needed to bisect. Installing another extension is not required for any other feature."));
+      }
+      const btns = h("div", "display:flex;gap:8px;justify-content:flex-end;");
+      btns.appendChild(btn("Start a bisect", () => startBisect(s), true));
+      card.appendChild(btns);
+    } else {
+      card.appendChild(row("Candidates left", String(bisect.candidates.length)));
+      card.appendChild(row("Instructed off", bisect.disabled.length ? bisect.disabled.join(", ") : "none"));
+      if (bisect.found.length) card.appendChild(row("Named culprit", bisect.found.join(", ")));
+
+      if (bisect.phase === "done") {
+        const good = bisect.status === "found";
+        card.appendChild(h("div", `font-size:12px;color:${good ? C.green : C.amber};background:${good ? "rgba(30,215,96,.10)" : "rgba(255,164,43,.10)"};border:1px solid ${good ? "rgba(30,215,96,.35)" : "rgba(255,164,43,.35)"};border-radius:10px;padding:9px 12px;line-height:1.45;`,
+          bisect.note));
+      } else if (bisect.awaiting && bisect.pending) {
+        card.appendChild(h("div", `font-size:12px;color:${C.text};background:rgba(76,179,212,.10);border:1px solid rgba(76,179,212,.35);border-radius:10px;padding:9px 12px;line-height:1.45;white-space:pre-wrap;`,
+          bisectInstruction()));
+      } else if (bisect.phase === "calibrate") {
+        card.appendChild(h("div", `font-size:12px;color:${C.text};background:rgba(76,179,212,.10);border:1px solid rgba(76,179,212,.35);border-radius:10px;padding:9px 12px;line-height:1.45;`,
+          "Calibration: reload Spotify without changing any extension, reopen this panel and measure again. Two readings of the same setup give the noise floor that every later round is tested against."));
+      }
+      if (bisect.note && bisect.phase !== "done") {
+        card.appendChild(h("div", `font-size:11px;color:${C.sub};line-height:1.45;`, bisect.note));
+      }
+
+      const btns = h("div", "display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;");
+      if (bisect.phase !== "done") {
+        const label = bisect.phase === "baseline" ? "Measure baseline" : bisect.phase === "calibrate" ? "Measure after reload" : "Measure this round";
+        btns.appendChild(btn(label, () => runBisectMeasure(), true));
+      }
+      if (bisect.pending) btns.appendChild(btn("Copy instruction", () => copyText(bisectInstruction())));
+      btns.appendChild(btn("Copy report", () => copyText(bisectReportText())));
+      if (bisect.phase === "done") {
+        if (bisect.found.length) btns.appendChild(btn("Find another", () => findAnotherBisect(s)));
+        btns.appendChild(btn("Start over", () => { resetBisect(); showPanel(); }));
+      } else {
+        btns.appendChild(btn("Abandon", () => { resetBisect(); showPanel(); }));
+      }
+      card.appendChild(btns);
+    }
+    sec.appendChild(card);
+    bBody.appendChild(sec);
+
+    if (bisect && bisect.rounds.length) {
+      const rSec = section("Rounds");
+      const rCard = h("div", `background:${C.card};border-radius:12px;padding:12px 14px;overflow:auto;`);
+      rCard.appendChild(miniTable(
+        ["round", "toggled", "action", "before fps", "after fps", "delta", "noise", "outcome"],
+        bisect.rounds.map((r) => [r.n, r.toggled.join(", "), r.action, r.before, r.after, r.delta, r.noise, r.outcome])
+      ));
+      rSec.appendChild(rCard);
+      bBody.appendChild(rSec);
+    }
+
+    const limSec = section("Limits of bisect");
+    const limCard = h("div", `background:${C.card};border-radius:12px;padding:12px 14px;font-size:11px;color:${C.sub};line-height:1.5;`);
+    limCard.textContent =
+      "One culprit per run: after a culprit is named, 'Find another' starts a new run with that extension excluded. " +
+      "A cost that only appears when two extensions are installed together can end as 'inconclusive' because every single toggle looks like noise. " +
+      "Marketplace toggles take effect after a Spotify reload, so each round needs a reload; the calibration measures that reload-to-reload spread on this machine before any round is judged. " +
+      "The extension list comes from Spicetify.Config.extensions or Marketplace, whichever is available; it starts from the assumption that every listed extension is enabled. " +
+      "Snippets and themes are not toggled by this workflow.";
+    limSec.appendChild(limCard);
+    bBody.appendChild(limSec);
+  }
 
   // Thresholds are deliberately explicit so the README can quote the same
   // numbers. They are calibrated from measured extensions on one machine; see
@@ -1961,6 +2060,277 @@
     callbackMsPerSec: { pass: 8, warn: 25 },
     intervalsPerSec: { pass: 2, warn: 10 },
   };
+
+  // ---------------------------------------------------------------- bisect
+  // Guided, never automatic: extension toggles are the user's job, because this
+  // extension must not disable anything. One round toggles half of the current
+  // candidates; the user applies that in Marketplace and reloads. A change
+  // larger than the measured reload-to-reload noise points at the toggled half;
+  // a change inside the noise points at the other half and is never called a
+  // result. Start-up calibration measures that noise with two identical runs.
+  const BISECT_KEY = "perf-adviser:bisect";
+  const BISECT = { runMs: 5000, runs: 3, maxRounds: 8, repeatMax: 1 };
+  let bisect = loadBisect();
+  let bisectBusy = false;
+
+  function loadBisect() {
+    try {
+      const v = JSON.parse(localStorage.getItem(BISECT_KEY) || "null");
+      if (!v || typeof v !== "object" || !Array.isArray(v.candidates) || !v.phase) return null;
+      if (!Array.isArray(v.rounds)) v.rounds = [];
+      if (!Array.isArray(v.found)) v.found = [];
+      if (!Array.isArray(v.disabled)) v.disabled = [];
+      v.noiseFloor = +v.noiseFloor || 0;
+      return v;
+    } catch (e) { return null; }
+  }
+  function saveBisect() {
+    try {
+      if (bisect) localStorage.setItem(BISECT_KEY, JSON.stringify(bisect));
+      else localStorage.removeItem(BISECT_KEY);
+    } catch (e) { /* ignore */ }
+  }
+  function resetBisect() { bisect = null; saveBisect(); }
+
+  // Names the user can find in Marketplace -> Installed. Falls back to the
+  // loaded file names when Marketplace data is unavailable.
+  function extensionNames(s) {
+    const out = new Set();
+    try {
+      const list = Spicetify.Config && Spicetify.Config.extensions;
+      if (Array.isArray(list) && list.length) {
+        for (const f of list) {
+          const n = String(f).replace(/\.js$/i, "");
+          if (n && !/^perf-adviser$/i.test(n)) out.add(n);
+        }
+      }
+    } catch (e) { /* ignore */ }
+    if (!out.size && s && s.market && s.market.extensions) {
+      for (const e of s.market.extensions) {
+        if (e && e.name && !/perf adviser/i.test(e.name)) out.add(e.name);
+      }
+    }
+    return [...out].sort((a, b) => a.localeCompare(b));
+  }
+
+  function bisectInstruction() {
+    if (!bisect || !bisect.pending) return "";
+    const p = bisect.pending;
+    return "Turn " + (p.action === "disable" ? "OFF" : "ON") + " these " + p.toggled.length +
+      " extension(s) in Marketplace -> Installed: " + p.toggled.join(", ") +
+      ". Then reload Spotify (or restart it), open Perf Adviser -> Bisect and click Measure this round. Leave every other extension as it is.";
+  }
+
+  function pushBisectRound(pend, afterFps, delta, noise, outcome) {
+    bisect.rounds.push({
+      at: new Date().toISOString(),
+      n: bisect.rounds.length + 1,
+      toggled: pend.toggled.slice(),
+      action: pend.action,
+      before: bisect.last ? bisect.last.fps : null,
+      after: +afterFps.toFixed(1),
+      delta,
+      noise: +noise.toFixed(1),
+      samples: pend.samples.map((x) => x.fps),
+      outcome,
+    });
+    while (bisect.rounds.length > 12) bisect.rounds.shift();
+  }
+
+  function nextBisectRound() {
+    if (!bisect.candidates.length) {
+      bisect.phase = "done";
+      bisect.status = "inconclusive";
+      bisect.note = "No candidates left. Nothing was toggled often enough to name a culprit.";
+      return;
+    }
+    if (bisect.rounds.length >= BISECT.maxRounds) {
+      bisect.phase = "done";
+      bisect.status = "inconclusive";
+      bisect.note = "Stopped after " + BISECT.maxRounds + " rounds without narrowing to one extension.";
+      return;
+    }
+    const half = Math.ceil(bisect.candidates.length / 2);
+    const toggled = bisect.candidates.slice(0, half);
+    const anyDisabled = toggled.some((n) => bisect.disabled.includes(n));
+    const action = anyDisabled ? "enable" : "disable";
+    bisect.disabled = action === "disable"
+      ? [...new Set([...bisect.disabled, ...toggled])]
+      : bisect.disabled.filter((n) => !toggled.includes(n));
+    bisect.pending = { toggled, action, samples: [] };
+    bisect.phase = "running";
+    bisect.awaiting = true;
+    bisect.note = "";
+  }
+
+  function bisectStep(m) {
+    if (!bisect) return;
+    if (bisect.phase === "baseline") {
+      bisect.baseline = m;
+      bisect.phase = "calibrate";
+      bisect.awaiting = false;
+      bisect.note = "Baseline recorded at " + m.fps + " fps. Reload Spotify without changing any extension, open Bisect again and measure. That second reading measures reload-to-reload noise, which is what every later comparison is tested against.";
+      return;
+    }
+    if (bisect.phase === "calibrate") {
+      const a = bisect.baseline;
+      bisect.noiseFloor = +Math.max(2, Math.abs(m.fps - a.fps), 1.4826 * Math.max(a.mad || 0, m.mad || 0)).toFixed(2);
+      bisect.calibration = { first: a, second: m, noise: bisect.noiseFloor };
+      bisect.last = m;
+      bisect.phase = "running";
+      bisect.note = "Reload-to-reload noise measured at " + bisect.noiseFloor + " fps. A change smaller than that is never reported as a result.";
+      nextBisectRound();
+      return;
+    }
+    const pend = bisect.pending;
+    if (!pend) { nextBisectRound(); return; }
+    pend.samples.push(m);
+    const before = bisect.last;
+    const fps = median(pend.samples.map((x) => x.fps));
+    const mad = Math.max(m.mad || 0, ...pend.samples.map((x) => x.mad || 0));
+    const noise = Math.max(bisect.noiseFloor || 0, 1.4826 * mad, 2);
+    const delta = +(fps - (before ? before.fps : fps)).toFixed(1);
+
+    if (Math.abs(delta) <= noise) {
+      if (pend.samples.length <= BISECT.repeatMax) {
+        bisect.note = "The change (" + delta + " fps) is inside the noise band (" + noise.toFixed(1) + " fps). Measure this round again without changing extensions: a second sample is needed before any conclusion.";
+        return;
+      }
+      const remain = bisect.candidates.filter((n) => !pend.toggled.includes(n));
+      pushBisectRound(pend, fps, delta, noise, "within noise twice - no conclusion");
+      bisect.last = { fps, mad, at: m.at, runs: m.runs };
+      bisect.pending = null;
+      bisect.awaiting = false;
+      if (!remain.length) {
+        bisect.status = "inconclusive";
+        bisect.phase = "done";
+        bisect.note = "Toggling " + pend.toggled.join(", ") + " alone did not move the metric beyond noise, so no single extension can be named. The cost may need a combination of extensions, or come from outside this list (theme, snippet, Spotify build).";
+        return;
+      }
+      bisect.candidates = remain;
+      bisect.note = "Toggling " + pend.toggled.join(", ") + " did not change the metric beyond noise (" + noise.toFixed(1) + " fps), so the cause is in the half that stayed as it was.";
+      if (remain.length === 1) {
+        bisect.note += " One candidate left; the next round toggles it.";
+      }
+      nextBisectRound();
+      return;
+    }
+
+    const moved = pend.toggled.slice();
+    pushBisectRound(pend, fps, delta, noise, "significant");
+    bisect.candidates = moved;
+    bisect.pending = null;
+    bisect.awaiting = false;
+    bisect.last = { fps, mad, at: m.at, runs: m.runs };
+    if (moved.length === 1) {
+      bisect.found = [...new Set([...(bisect.found || []), moved[0]])];
+      bisect.status = "found";
+      bisect.phase = "done";
+      bisect.note = "Toggling " + moved[0] + " alone moved Home scroll FPS by " + delta + " fps against a measured noise band of " + noise.toFixed(1) + " fps.";
+      return;
+    }
+    bisect.note = "Toggling " + moved.join(", ") + " moved FPS by " + delta + " fps against a noise band of " + noise.toFixed(1) + " fps, so the cause is inside that group.";
+    nextBisectRound();
+  }
+
+  async function runBisectMeasure() {
+    if (busy || bisectBusy) { notify("Perf Adviser is already measuring"); return; }
+    if (!bisect) return;
+    if (lag.nav.normRoute(route()) !== "/") { notify("Perf Adviser: open Home before a bisect measurement", true); return; }
+    bisectBusy = true;
+    busy = true;
+    try { Spicetify.PopupModal.hide(); } catch (e) { /* ignore */ }
+    notify("Perf Adviser: bisect measurement - " + BISECT.runs + " x " + (BISECT.runMs / 1000) + " s, the page will scroll");
+    await sleep(600);
+    let bm = null;
+    try { bm = await benchmark(BISECT.runMs, BISECT.runs); } finally { busy = false; bisectBusy = false; }
+    if (!bm || !bm.samples || !bm.samples.length) {
+      notify("Perf Adviser: no frames measured - is a scrollable page open?", true);
+      showPanel();
+      return;
+    }
+    bisectStep({ fps: bm.fps, mad: bm.mad, at: new Date().toISOString(), runs: bm.runs });
+    saveBisect();
+    await refresh();
+  }
+
+  async function startBisect(s) {
+    if (busy || bisectBusy) { notify("Perf Adviser is already measuring"); return; }
+    if (lag.nav.normRoute(route()) !== "/") { notify("Perf Adviser: open Home first", true); return; }
+    const candidates = extensionNames(s);
+    if (candidates.length < 2) {
+      notify("Perf Adviser: need at least two other extensions to bisect", true);
+      return;
+    }
+    bisect = {
+      startedAt: new Date().toISOString(),
+      phase: "baseline",
+      status: "running",
+      candidates,
+      disabled: [],
+      found: [],
+      rounds: [],
+      noiseFloor: 0,
+      calibration: null,
+      baseline: null,
+      last: null,
+      pending: null,
+      awaiting: false,
+      note: "",
+    };
+    saveBisect();
+    await runBisectMeasure();
+  }
+
+  async function findAnotherBisect(s) {
+    if (!bisect || !bisect.found.length) return;
+    const candidates = extensionNames(s).filter((n) => !bisect.found.includes(n));
+    if (candidates.length < 2) {
+      notify("Perf Adviser: no other extensions left to test", true);
+      return;
+    }
+    const disabled = bisect.disabled.slice();
+    const found = bisect.found.slice();
+    bisect = {
+      startedAt: new Date().toISOString(),
+      phase: "baseline",
+      status: "running",
+      candidates,
+      disabled,
+      found,
+      rounds: [],
+      noiseFloor: 0,
+      calibration: null,
+      baseline: null,
+      last: null,
+      pending: null,
+      awaiting: false,
+      note: "Looking for another culprit. Keep the already-found extension in the state that made the page fast, then measure a new baseline.",
+    };
+    saveBisect();
+    await runBisectMeasure();
+  }
+
+  function bisectReportText() {
+    if (!bisect) return "";
+    const lines = [];
+    lines.push("Perf Adviser guided bisect (heuristic, one machine)");
+    lines.push("Started: " + bisect.startedAt);
+    lines.push("Metric: median Home scroll FPS over " + BISECT.runs + " x " + (BISECT.runMs / 1000) + " s, plus a reload-to-reload noise calibration");
+    if (bisect.calibration) {
+      lines.push("Calibration: " + bisect.calibration.first.fps + " then " + bisect.calibration.second.fps +
+        " fps with no changes; noise floor " + bisect.calibration.noise + " fps");
+    }
+    for (const r of bisect.rounds) {
+      lines.push("Round " + r.n + ": turned " + (r.action === "disable" ? "OFF " : "ON ") + r.toggled.join(", ") +
+        "; before " + r.before + ", after " + r.after + ", delta " + r.delta + " fps, noise " + r.noise +
+        " fps -> " + r.outcome);
+    }
+    lines.push("Result: " + (bisect.status === "found" ? "culprit " + bisect.found.join(", ") : "inconclusive"));
+    if (bisect.note) lines.push("Note: " + bisect.note);
+    lines.push("Limits: finds one culprit per run; a cost that needs a combination of extensions may come out inconclusive; the extension list is whatever Marketplace and the loaded config expose; toggles are done by the user, never by this extension.");
+    return lines.join("\n");
+  }
 
   function evaluateAuthor(source, p, scroll) {
     const checks = [];
@@ -2315,6 +2685,7 @@
     const { recs } = buildRecommendations(s, p);
 
     const root = h("div", "display:flex;flex-direction:column;gap:16px;min-width:min(620px,78vw);max-height:70vh;overflow:auto;padding:4px 2px 8px;");
+    root.className = "perf-adviser-root";
 
     // header
     const head = h("div", "display:flex;align-items:center;justify-content:space-between;gap:12px;");
@@ -2325,9 +2696,33 @@
     head.appendChild(h("span", `font-size:11px;color:${C.sub};`, "no network"));
     root.appendChild(head);
 
+    // report / bisect tabs; only one body is shown, both are built so switching
+    // back does not need a measurement
+    const tabBar = h("div", "display:flex;gap:6px;border-bottom:1px solid rgba(128,128,128,.18);padding-bottom:6px;");
+    const tabBtn = (label, view) => {
+      const active = panelView === view;
+      const el = btn(label, () => switchPanelView(view), active);
+      el.style.borderRadius = "8px";
+      el.style.padding = "5px 12px";
+      el.style.fontSize = "12px";
+      if (!active) el.style.color = C.sub;
+      return el;
+    };
+    tabBar.appendChild(tabBtn("Report", "report"));
+    tabBar.appendChild(tabBtn("Bisect", "bisect"));
+    root.appendChild(tabBar);
+
+    const body = h("div", "display:flex;flex-direction:column;gap:16px;");
+    body.style.display = panelView === "report" ? "" : "none";
+    root.appendChild(body);
+
+    const bBody = h("div", "display:flex;flex-direction:column;gap:16px;");
+    bBody.style.display = panelView === "bisect" ? "" : "none";
+    root.appendChild(bBody);
+
     const health = s.selectorHealth;
     if (health && health.migrated) {
-      root.appendChild(h("div", `font-size:12px;color:${C.amber};background:rgba(255,164,43,.12);border:1px solid rgba(255,164,43,.35);border-radius:10px;padding:9px 12px;line-height:1.45;`,
+      body.appendChild(h("div", `font-size:12px;color:${C.amber};background:rgba(255,164,43,.12);border:1px solid rgba(255,164,43,.35);border-radius:10px;padding:9px 12px;line-height:1.45;`,
         "Spotify updated to " + health.version + " (last checked on " + health.previous + "). Re-run the scroll test; the Selector health section below shows which class names this version still uses."));
     }
 
@@ -2349,9 +2744,9 @@
     scoreBtns.appendChild(btn("Measure again", () => runBench(true), true));
     scoreBtns.appendChild(btn("Copy report", () => copyText(reportText(s, b, p))));
     score.appendChild(scoreBtns);
-    root.appendChild(score);
+    body.appendChild(score);
     if (b && b.runs === 1) {
-      root.appendChild(h("div", `font-size:11px;color:${C.sub};margin-top:-8px;`, "One short run (after a warm-up). Home FPS also depends on where the mouse rests: over a card, Spotify's play-button tooltip churns every scroll frame. 'Measure again' runs 2 x 6 s."));
+      body.appendChild(h("div", `font-size:11px;color:${C.sub};margin-top:-8px;`, "One short run (after a warm-up). Home FPS also depends on where the mouse rests: over a card, Spotify's play-button tooltip churns every scroll frame. 'Measure again' runs 2 x 6 s."));
     }
 
     // findings
@@ -2370,7 +2765,7 @@
       box.appendChild(body);
       findings.appendChild(box);
     }
-    root.appendChild(findings);
+    body.appendChild(findings);
 
     // environment
     const env = section("Environment");
@@ -2388,7 +2783,7 @@
     env.appendChild(row("Injected CSS", s.cssOff ? "disabled" : "active", s.cssOff ? C.amber : C.green));
     env.appendChild(row("CSS editor", s.cssEditorChars == null ? "unknown" : s.cssEditorChars ? s.cssEditorChars + " chars" : "empty", s.cssEditorChars ? C.amber : C.green));
     env.appendChild(row("Page zoom", (s.zoom.level == null ? "unknown" : zoomPct(s.zoom.level)) + " / DPR " + s.zoom.dpr.toFixed(3), s.zoom.level === 0 ? C.green : C.amber));
-    root.appendChild(env);
+    body.appendChild(env);
 
     // Generic CSS inventory: every snippet, the theme and extension <style>
     // blocks, ranked by expensive signals. Counts only - the profiler gives
@@ -2406,7 +2801,7 @@
       cssCard.appendChild(h("div", `font-size:12px;color:${C.sub};`, "No snippet, theme or extension CSS found."));
     }
     cssSec.appendChild(cssCard);
-    root.appendChild(cssSec);
+    body.appendChild(cssSec);
 
     // fixes
     const fixes = section("Fixes (measured)");
@@ -2557,7 +2952,7 @@
     }
     fixCard.appendChild(killRow);
     fixes.appendChild(fixCard);
-    root.appendChild(fixes);
+    body.appendChild(fixes);
 
     // runtime CSS patches (separate: they do not inject any CSS rule)
     const rt = s.runtime || { active: false, parked: 0, live: 0, mirrored: 0 };
@@ -2590,7 +2985,7 @@
     }, !rt.active));
     rtCard.appendChild(rtRow);
     rtSec.appendChild(rtCard);
-    root.appendChild(rtSec);
+    body.appendChild(rtSec);
 
     // profiler
     const profile = section("Profile (merged from Perf Tools)");
@@ -2642,7 +3037,7 @@
       }
     }
     profile.appendChild(pCard);
-    root.appendChild(profile);
+    body.appendChild(profile);
 
     // ------------------------------------------------ what just lagged? (opt-in)
     const lagSec = section("What just lagged?");
@@ -2706,7 +3101,7 @@
       lagCard.appendChild(h("div", `font-size:12px;color:${C.sub};`, "Nothing is being observed. Idle cost while off is zero: no observer, no timer."));
     }
     lagSec.appendChild(lagCard);
-    root.appendChild(lagSec);
+    body.appendChild(lagSec);
 
     // ------------------------------------------------ page navigation timing
     const navSec = section("Page navigation timing");
@@ -2758,7 +3153,7 @@
       navCard.appendChild(h("div", `font-size:12px;color:${C.sub};`, "Idle cost while off is zero: the shared observer is disconnected when both this and the slow-frame recorder are off."));
     }
     navSec.appendChild(navCard);
-    root.appendChild(navSec);
+    body.appendChild(navSec);
 
     // ------------------------------------------------ selector health
     const selSec = section("Selector health");
@@ -2796,7 +3191,7 @@
       selCard.appendChild(h("div", `font-size:12px;color:${C.sub};`, "Selector health unavailable."));
     }
     selSec.appendChild(selCard);
-    root.appendChild(selSec);
+    body.appendChild(selSec);
 
     // ------------------------------------------------ author check (heuristic)
     const aSec = section("Author check (heuristic)");
@@ -2889,7 +3284,9 @@
       aCard.appendChild(h("div", `font-size:12px;color:${C.sub};`, "Timing-only results still work without Author mode; startup observers and intervals are invisible until it is on and Spotify is reloaded."));
     }
     aSec.appendChild(aCard);
-    root.appendChild(aSec);
+    body.appendChild(aSec);
+
+    buildBisectPanel(bBody, s);
 
     // footer
     const foot = h("details", `font-size:11px;color:${C.sub};line-height:1.5;`);
@@ -2902,7 +3299,7 @@
       "The CSS/animation inventory is read only when the panel is built, never on a timer. " +
       "Uninstall: run \"spicetify config extensions perf-adviser.js-\" then \"spicetify apply -n\" (or delete perf-adviser.js from %APPDATA%\\spicetify\\Extensions and remove it from config-xpui.ini)."
     ));
-    root.appendChild(foot);
+    body.appendChild(foot);
 
     Spicetify.PopupModal.display({ title: "Performance Adviser", content: root, isLarge: true });
     skinModal();
@@ -2920,7 +3317,7 @@
     if (busy) return;
     busy = true;
     try {
-      Spicetify.PopupModal.hide();
+    try { Spicetify.PopupModal.hide(); } catch (e) { /* ignore */ }
     } catch (e) { /* ignore */ }
     notify("Perf Adviser: measuring " + (full ? "2 x 6 s" : "5 s") + " - the page will scroll");
     await sleep(600);
@@ -3023,6 +3420,34 @@
         run: (src) => runAuthorCheck(src || authorPick),
         evaluate: (src, profile, scroll) => evaluateAuthor(src, profile, scroll),
         thresholds: AUTHOR,
+      },
+      bisect: {
+        get state() { return bisect ? JSON.parse(JSON.stringify(bisect)) : null; },
+        candidates: () => extensionNames(last ? last.scan : null),
+        start: () => startBisect(last ? last.scan : null),
+        measure: runBisectMeasure,
+        reset: () => { resetBisect(); if (last) showPanel(); },
+        findAnother: () => findAnotherBisect(last ? last.scan : null),
+        report: bisectReportText,
+        instruction: bisectInstruction,
+        // Scripted control: same decision path with supplied FPS instead of a
+        // live scroll. Intended for tests and for replaying saved numbers.
+        begin(names) {
+          bisect = {
+            startedAt: new Date().toISOString(), phase: "baseline", status: "running",
+            candidates: (Array.isArray(names) ? names : []).map(String),
+            disabled: [], found: [], rounds: [], noiseFloor: 0, calibration: null,
+            baseline: null, last: null, pending: null, awaiting: false, note: "",
+          };
+          saveBisect();
+          return JSON.parse(JSON.stringify(bisect));
+        },
+        apply(fps, mad) {
+          if (!bisect) return null;
+          bisectStep({ fps: +fps, mad: +mad || 0, at: new Date().toISOString(), runs: 1 });
+          saveBisect();
+          return JSON.parse(JSON.stringify(bisect));
+        },
       },
       cssEditorChars,
       selectorHealth: () => evaluateSelectorHealth(lastMarket),
