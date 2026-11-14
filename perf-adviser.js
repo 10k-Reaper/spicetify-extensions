@@ -354,23 +354,32 @@
   }
 
   // Keep the mirror classes equal to what the original :has() rules would match.
+  // Every add/remove is guarded: a no-op classList call still queues an attribute
+  // record in Chromium, and this function runs from the body observer's callback.
+  // Unguarded writes made the observer re-trigger itself while a .track-peek
+  // existed, starving timers and rendering (see tests/peek-loop.mjs).
   function updatePeekMirrors(on) {
     if (!on) {
-      for (const el of document.querySelectorAll("." + PEEK_WRAP)) el.classList.remove(PEEK_WRAP);
-      for (const el of document.querySelectorAll("." + PEEK_ANCHOR)) el.classList.remove(PEEK_ANCHOR);
+      for (const el of document.querySelectorAll("." + PEEK_WRAP)) {
+        if (el.classList.contains(PEEK_WRAP)) el.classList.remove(PEEK_WRAP);
+      }
+      for (const el of document.querySelectorAll("." + PEEK_ANCHOR)) {
+        if (el.classList.contains(PEEK_ANCHOR)) el.classList.remove(PEEK_ANCHOR);
+      }
       return;
     }
     for (const peek of document.querySelectorAll(".track-peek")) {
       const wrap = peek.parentElement;
-      if (wrap) wrap.classList.add(PEEK_WRAP);
+      if (wrap && !wrap.classList.contains(PEEK_WRAP)) wrap.classList.add(PEEK_WRAP);
       const controls = peek.closest('[data-testid="player-controls"]');
-      if (controls && controls.parentElement) controls.parentElement.classList.add(PEEK_ANCHOR);
+      const anchor = controls && controls.parentElement;
+      if (anchor && !anchor.classList.contains(PEEK_ANCHOR)) anchor.classList.add(PEEK_ANCHOR);
     }
     for (const el of document.querySelectorAll("." + PEEK_WRAP)) {
-      if (!el.querySelector(":scope > .track-peek")) el.classList.remove(PEEK_WRAP);
+      if (el.classList.contains(PEEK_WRAP) && !el.querySelector(":scope > .track-peek")) el.classList.remove(PEEK_WRAP);
     }
     for (const el of document.querySelectorAll("." + PEEK_ANCHOR)) {
-      if (!el.querySelector(':scope > [data-testid="player-controls"] .track-peek')) el.classList.remove(PEEK_ANCHOR);
+      if (el.classList.contains(PEEK_ANCHOR) && !el.querySelector(':scope > [data-testid="player-controls"] .track-peek')) el.classList.remove(PEEK_ANCHOR);
     }
   }
 
@@ -506,6 +515,28 @@
     return n;
   }
 
+  // Does this batch touch a .track-peek node (or a subtree containing one)?
+  // Replaces a full-document query on every observer batch. Mirror classes are
+  // written to .track-peek's ancestors, so an ancestor batch still reports true;
+  // the guarded writes in updatePeekMirrors make that a single no-op callback
+  // instead of another round.
+  function recordsTouchPeek(records) {
+    const hasPeek = (node) => {
+      if (!node || node.nodeType !== 1) return false;
+      if (node.classList && node.classList.contains("track-peek")) return true;
+      try { return !!node.querySelector(".track-peek"); } catch (e) { return false; }
+    };
+    for (const rec of records) {
+      if (rec.type === "attributes") {
+        if (hasPeek(rec.target)) return true;
+        continue;
+      }
+      for (const node of rec.addedNodes) if (hasPeek(node)) return true;
+      for (const node of rec.removedNodes) if (hasPeek(node)) return true;
+    }
+    return false;
+  }
+
   function onPatchMutations(records) {
     const pre = runtime.precond;
     let flip = false;
@@ -521,7 +552,7 @@
       }
       if (flip) break;
     }
-    const peekTouched = !!document.querySelector(".track-peek, ." + PEEK_WRAP + ", ." + PEEK_ANCHOR);
+    const peekTouched = recordsTouchPeek(records);
     // A new track-peek must get its mirror class before the next frame, not
     // after the revive timer, or the pill renders unstyled for a moment.
     if (peekTouched) updatePeekMirrors(true);
