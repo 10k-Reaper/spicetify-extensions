@@ -409,6 +409,10 @@
       inner.style.setProperty("backdrop-filter", "none", "important");
       inner.classList.add(PANEL_MODAL);
     }
+    // PopupModal can mount a tick after display(), which resets the scroll
+    // container; put the saved offset back once the content is really there.
+    const adviserRoot = modal.querySelector(".perf-adviser-root");
+    if (adviserRoot) adviserRoot.scrollTop = panelScroll[adviserRoot.dataset.view || "report"] || 0;
   }
 
   // ------------------------------------------------------- runtime CSS patches
@@ -1955,11 +1959,26 @@
   let authorPick = null;
   let authorCheck = null;
   let panelView = "report";
+  let panelRoot = null;
+  const panelScroll = { report: 0, bisect: 0 };
+
+  // Switching tabs rebuilds the panel, but each tab keeps its own scroll offset.
+  function savePanelScroll() {
+    // A detached modal reports scrollTop 0, which would clobber the saved
+    // offset; only read a root that is still mounted.
+    if (panelRoot && panelRoot.isConnected) panelScroll[panelRoot.dataset.view || "report"] = panelRoot.scrollTop;
+  }
 
   function switchPanelView(view) {
     if (view === panelView) return;
+    if (panelRoot) panelScroll[panelView] = panelRoot.scrollTop;
     panelView = view;
     showPanel();
+    const el = document.querySelector(".perf-adviser-root");
+    if (el) {
+      el.dataset.view = view;
+      el.scrollTop = panelScroll[view] || 0;
+    }
   }
 
   function buildBisectPanel(bBody, s) {
@@ -2239,7 +2258,7 @@
     if (lag.nav.normRoute(route()) !== "/") { notify("Perf Adviser: open Home before a bisect measurement", true); return; }
     bisectBusy = true;
     busy = true;
-    try { Spicetify.PopupModal.hide(); } catch (e) { /* ignore */ }
+    savePanelScroll(); try { Spicetify.PopupModal.hide(); } catch (e) { /* ignore */ }
     notify("Perf Adviser: bisect measurement - " + BISECT.runs + " x " + (BISECT.runMs / 1000) + " s, the page will scroll");
     await sleep(600);
     let bm = null;
@@ -2408,7 +2427,7 @@
     if (lag.nav.normRoute(route()) !== "/") { notify("Perf Adviser: open Home before the author check", true); return; }
     if (!source) { notify("Perf Adviser: pick a source first", true); return; }
     busy = true;
-    try { Spicetify.PopupModal.hide(); } catch (e) { /* ignore */ }
+    savePanelScroll(); try { Spicetify.PopupModal.hide(); } catch (e) { /* ignore */ }
     notify("Perf Adviser: author check - scrolling Home for " + (AUTHOR.scrollMs / 1000) + " s, then " + (AUTHOR.idleMs / 1000) + " s idle");
     await sleep(500);
     author.resetTimings();
@@ -2683,9 +2702,12 @@
     const { scan: s, bench: b } = last;
     const p = last.prof || null;
     const { recs } = buildRecommendations(s, p);
+    savePanelScroll();
 
     const root = h("div", "display:flex;flex-direction:column;gap:16px;min-width:min(620px,78vw);max-height:70vh;overflow:auto;padding:4px 2px 8px;");
     root.className = "perf-adviser-root";
+    root.dataset.view = panelView;
+    root.addEventListener("scroll", () => { if (root.isConnected && root === panelRoot) panelScroll[root.dataset.view || "report"] = root.scrollTop; }, { passive: true });
 
     // header
     const head = h("div", "display:flex;align-items:center;justify-content:space-between;gap:12px;");
@@ -3302,6 +3324,13 @@
     body.appendChild(foot);
 
     Spicetify.PopupModal.display({ title: "Performance Adviser", content: root, isLarge: true });
+    panelRoot = root;
+    // A rebuild from a measurement, a tab switch or a refresh must not jump the
+    // panel back to the top; restore the offset for the tab being shown. The
+    // modal may lay out a frame later, so repeat once after layout.
+    const restore = () => { root.scrollTop = panelScroll[panelView] || 0; };
+    restore();
+    try { requestAnimationFrame(() => requestAnimationFrame(restore)); } catch (e) { /* ignore */ }
     skinModal();
   }
 
@@ -3317,6 +3346,7 @@
     if (busy) return;
     busy = true;
     try {
+      savePanelScroll();
     try { Spicetify.PopupModal.hide(); } catch (e) { /* ignore */ }
     } catch (e) { /* ignore */ }
     notify("Perf Adviser: measuring " + (full ? "2 x 6 s" : "5 s") + " - the page will scroll");
@@ -3331,7 +3361,7 @@
 
   function startProfile() {
     if (prof.recording) return;
-    try { Spicetify.PopupModal.hide(); } catch (e) { /* ignore */ }
+    savePanelScroll(); try { Spicetify.PopupModal.hide(); } catch (e) { /* ignore */ }
     prof.start();
     last = { scan: last ? last.scan : null, bench: last ? last.bench : null, prof: null };
     notify("Perf Adviser: recording - scroll the slow page, then reopen the gauge and press Stop");
