@@ -148,6 +148,7 @@
     runtimePatch: true,
     cssOff: false,
     lagRecorder: false,
+    navTiming: false,
   };
   function loadState() {
     let stored = {};
@@ -1105,6 +1106,114 @@
     let dropped = 0;
     let lastAt = 0;
 
+    // ---- navigation timing (shares this observer) --------------------------
+    // Definition, also documented in the README and the panel: from the route
+    // change, sum the blocking time of every long frame that STARTED inside the
+    // next 2 s, then add the time from the route change to the END of the last
+    // such frame ("settle"). costMs = settleMs + blockingMs. It is not first
+    // paint and it stays near zero on a route change that never produces a long
+    // frame, which is the point: it measures jank, not network time.
+    const NAV_WINDOW = 2000;
+    const NAV_SAMPLES = 30;
+    const NAV_RECENT = 20;
+    let navActive = null;
+    let navRoutes = new Map();
+    let navRecent = [];
+    let navMarks = 0;
+
+    const medianOf = (vals) => {
+      if (!vals.length) return 0;
+      const s = [...vals].sort((a, b) => a - b);
+      const n = s.length;
+      return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
+    };
+
+    function normalizeRoute(p) {
+      p = String(p || "/").split("?")[0].split("#")[0] || "/";
+      const m = /^\/(playlist|album|artist|show|episode|user|concert)\/[^/]+/.exec(p);
+      return m ? "/" + m[1] + "/*" : p;
+    }
+
+    function finalizeNav(force) {
+      if (!navActive) return null;
+      if (!force && performance.now() < navActive.start + NAV_WINDOW) return null;
+      const nav = navActive;
+      navActive = null;
+      const blocking = nav.frames.reduce((n, f) => n + f.blocking, 0);
+      const lastEnd = nav.frames.length ? Math.max(...nav.frames.map((f) => f.end)) : nav.start;
+      const settle = Math.max(0, lastEnd - nav.start);
+      const src = new Map();
+      for (const f of nav.frames) {
+        for (const s of f.scripts) {
+          let r = src.get(s.file);
+          if (!r) { r = { file: s.file, ms: 0, calls: 0 }; src.set(s.file, r); }
+          r.ms += s.duration; r.calls++;
+        }
+      }
+      const sample = {
+        route: nav.route,
+        at: nav.at,
+        frames: nav.frames.length,
+        blocking: +blocking.toFixed(1),
+        settle: +settle.toFixed(1),
+        cost: +(settle + blocking).toFixed(1),
+        sources: [...src.values()].sort((a, b) => b.ms - a.ms),
+      };
+      let r = navRoutes.get(nav.route);
+      if (!r) { r = { route: nav.route, samples: [] }; navRoutes.set(nav.route, r); }
+      r.samples.push(sample);
+      while (r.samples.length > NAV_SAMPLES) r.samples.shift();
+      navRecent.push(sample);
+      while (navRecent.length > NAV_RECENT) navRecent.shift();
+      return sample;
+    }
+
+    function markNavigation(explicitRoute) {
+      if (!state.navTiming) return null;
+      finalizeNav(true);
+      navActive = { route: normalizeRoute(explicitRoute || route()), start: performance.now(), frames: [], at: Date.now() };
+      navMarks++;
+      return navActive.route;
+    }
+
+    function addToNav(entry, rawStart, rawEnd) {
+      if (!navActive || !state.navTiming) return;
+      if (rawStart > navActive.start + NAV_WINDOW) { finalizeNav(true); return; }
+      if (rawEnd < navActive.start) return;
+      navActive.frames.push({ duration: entry.duration, blocking: entry.blocking, end: rawEnd, scripts: entry.scripts });
+    }
+
+    function navRows() {
+      const rows = [];
+      for (const v of navRoutes.values()) {
+        const costs = v.samples.map((s) => s.cost);
+        const blocks = v.samples.map((s) => s.blocking);
+        const src = new Map();
+        for (const s of v.samples) for (const x of s.sources) {
+          let r = src.get(x.file);
+          if (!r) { r = { file: x.file, ms: 0, calls: 0 }; src.set(x.file, r); }
+          r.ms += x.ms; r.calls += x.calls;
+        }
+        const top = [...src.values()].sort((a, b) => b.ms - a.ms)[0];
+        rows.push({
+          route: v.route,
+          n: v.samples.length,
+          median: +medianOf(costs).toFixed(1),
+          worst: +Math.max(...costs).toFixed(1),
+          blocking: +medianOf(blocks).toFixed(1),
+          frames: +medianOf(v.samples.map((s) => s.frames)).toFixed(1),
+          top: top ? top.file + " " + top.ms.toFixed(1) + " ms" : "-",
+        });
+      }
+      return rows.sort((a, b) => b.median - a.median);
+    }
+
+    function clearNav() {
+      navRoutes = new Map();
+      navRecent = [];
+      navActive = null;
+    }
+
     const base = (u) => {
       u = String(u || "").split("?")[0].split("#")[0];
       const p = u.split("/");
@@ -1129,10 +1238,11 @@
       };
     }
 
-    function push(entry) {
+    function push(entry, raw) {
       lastAt = Date.now();
       entries.push(entry);
       while (entries.length > MAX) { entries.shift(); dropped++; }
+      if (raw) addToNav(entry, raw.startTime || 0, (raw.startTime || 0) + (raw.duration || 0));
     }
 
     function start() {
@@ -1141,7 +1251,7 @@
       if (!mode) return;
       try {
         obs = new PerformanceObserver((list) => {
-          for (const e of list.getEntries()) push(normalize(e));
+          for (const e of list.getEntries()) push(normalize(e), e);
         });
         obs.observe({ type: mode });
         running = true;
@@ -1156,11 +1266,12 @@
       if (obs) { try { obs.disconnect(); } catch (e) { /* ignore */ } }
       obs = null;
       running = false;
+      finalizeNav(true);
     }
 
-    // One observer serves the lag recorder and the navigation timer (feature 2).
+    // One observer serves the lag recorder and the navigation timer.
     function wanted() {
-      return !!state.lagRecorder;
+      return !!(state.lagRecorder || state.navTiming);
     }
     function sync() {
       if (wanted()) start(); else stop();
@@ -1192,9 +1303,29 @@
       get dropped() { return dropped; },
       get lastAt() { return lastAt; },
       start, stop, sync, clear, rollup,
+      nav: {
+        get marks() { return navMarks; },
+        get active() { return navActive ? { route: navActive.route, start: +navActive.start.toFixed(1), frames: navActive.frames.length } : null; },
+        get recent() { return navRecent.slice(); },
+        rows: navRows,
+        mark: markNavigation,
+        finalize: finalizeNav,
+        clear: clearNav,
+        windowMs: NAV_WINDOW,
+      },
     };
   })();
   lag.sync();
+
+  // Route changes are the only navigation signal; no timer and no polling. The
+  // listener is installed once and does nothing while navTiming is off.
+  try {
+    if (Spicetify.Platform && Spicetify.Platform.History && Spicetify.Platform.History.listen) {
+      Spicetify.Platform.History.listen((location) => {
+        if (state.navTiming) lag.nav.mark(location && location.pathname);
+      });
+    }
+  } catch (e) { /* ignore */ }
 
   // ---------------------------------------------------------------- environment
   function timeout(promise, ms, fallback) {
@@ -1408,6 +1539,7 @@
   }
 
   async function scan() {
+    lag.nav.finalize(false);
     const [market, zoom] = await Promise.all([readMarketplace(), readZoom()]);
     const css = cssSources();
     const coverName = coverAnimationName();
@@ -1732,6 +1864,15 @@
     const lagRoll = lag.rollup().slice(0, 8);
     if (lagRoll.length) {
       lines.push("  by source: " + lagRoll.map((x) => x.file + " " + x.ms.toFixed(1) + " ms/" + x.calls).join(", "));
+    }
+    if (state.navTiming) {
+      const navRows = lag.nav.rows();
+      lines.push("Route change timing: on, " + lag.nav.marks + " mark(s), window " + (lag.nav.windowMs / 1000) + " s");
+      if (!navRows.length) lines.push("  no completed route change yet");
+      navRows.forEach((r) => lines.push("  " + r.route + ": median " + r.median + " ms, worst " + r.worst + " ms, blocking " + r.blocking + " ms, " + r.n + " sample(s), top " + r.top));
+      lag.nav.recent.slice(-5).forEach((r) => lines.push("  last " + r.route + ": cost " + r.cost + " ms (frames " + r.frames + ", blocking " + r.blocking + ", settle " + r.settle + ")"));
+    } else {
+      lines.push("Route change timing: off");
     }
     if (s.coverSource) lines.push("Cover animation source: " + s.coverSource.name + " (" + s.coverSource.kind + ")");
     if (s.animations && s.animations.length) {
@@ -2141,6 +2282,58 @@
     lagSec.appendChild(lagCard);
     root.appendChild(lagSec);
 
+    // ------------------------------------------------ page navigation timing
+    const navSec = section("Page navigation timing");
+    const navCard = h("div", `display:flex;flex-direction:column;gap:10px;background:${C.card};border-radius:12px;padding:12px 14px;`);
+    const navTop = h("div", "display:flex;align-items:center;gap:12px;justify-content:space-between;flex-wrap:wrap;");
+    const navText = h("div", "display:flex;flex-direction:column;gap:3px;flex:1 1 340px;min-width:260px;");
+    const navTitle = h("div", "display:flex;align-items:center;gap:8px;flex-wrap:wrap;");
+    navTitle.appendChild(h("div", `font-size:13px;color:${C.text};`, "Route change cost"));
+    navTitle.appendChild(pill(state.navTiming ? "on" : "off", state.navTiming ? C.green : C.sub));
+    if (state.navTiming && lag.nav.active) navTitle.appendChild(pill("recording " + lag.nav.active.route, C.blue));
+    navText.appendChild(navTitle);
+    navText.appendChild(h("div", `font-size:12px;color:${C.sub};line-height:1.45;`,
+      !state.navTiming
+        ? "Off. When on, each route change starts a 2 s window. Navigation cost = blocking time of the long frames that start in that window + time from the change to the end of the last one. It measures jank after the change, not download or first-paint time."
+        : "Cost = settle time (route change to the end of the last long frame that started within 2 s) + the blocking time of those frames. A clean change reads near zero; it is not a page-load timer."));
+    navTop.appendChild(navText);
+    navTop.appendChild(btn(state.navTiming ? "Turn off" : "Turn on", () => {
+      state.navTiming = !state.navTiming;
+      saveState(state);
+      lag.sync();
+      if (state.navTiming) lag.nav.mark();
+      notify(state.navTiming ? "Perf Adviser: timing route changes" : "Perf Adviser: route timing off");
+      refresh();
+    }, !state.navTiming));
+    navCard.appendChild(navTop);
+
+    if (state.navTiming) {
+      const rows = lag.nav.rows();
+      if (rows.length) {
+        navCard.appendChild(miniTable(
+          ["route", "n", "median ms", "worst ms", "blocking ms", "top source"],
+          rows.slice(0, 10).map((r) => [r.route, r.n, r.median, r.worst, r.blocking, r.top])
+        ));
+      } else {
+        navCard.appendChild(h("div", `font-size:12px;color:${C.sub};`, "No completed route change yet. Navigate Home -> Playlist -> Search -> Library -> Home, then reopen this panel."));
+      }
+      const recent = lag.nav.recent.slice(-5).reverse();
+      if (recent.length) {
+        navCard.appendChild(h("div", `font-size:11px;color:${C.sub};margin-top:4px;`, "Last route changes (newest first)"));
+        navCard.appendChild(miniTable(
+          ["route", "frame ms", "blocking", "settle", "cost"],
+          recent.map((r) => [r.route, r.frames, r.blocking, r.settle, r.cost])
+        ));
+      }
+      const navBtns = h("div", "display:flex;gap:8px;justify-content:flex-end;");
+      navBtns.appendChild(btn("Clear", () => { lag.nav.clear(); refresh(); }));
+      navCard.appendChild(navBtns);
+    } else {
+      navCard.appendChild(h("div", `font-size:12px;color:${C.sub};`, "Idle cost while off is zero: the shared observer is disconnected when both this and the slow-frame recorder are off."));
+    }
+    navSec.appendChild(navCard);
+    root.appendChild(navSec);
+
     // footer
     const foot = h("details", `font-size:11px;color:${C.sub};line-height:1.5;`);
     foot.appendChild(h("summary", "cursor:pointer;", "How it measures / uninstall"));
@@ -2252,6 +2445,14 @@
         stop: lag.stop,
         clear: lag.clear,
         rollup: lag.rollup,
+        nav: {
+          get marks() { return lag.nav.marks; },
+          get recent() { return lag.nav.recent; },
+          rows: lag.nav.rows,
+          mark: lag.nav.mark,
+          finalize: lag.nav.finalize,
+          clear: lag.nav.clear,
+        },
       },
       cssEditorChars,
       getState: () => Object.assign({}, state),
