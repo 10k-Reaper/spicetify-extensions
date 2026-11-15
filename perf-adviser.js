@@ -53,6 +53,7 @@
   const SCROLL_CLASS = "perf-adviser-scrolling";
   const PANEL_ID = "perf-adviser-panel-style";
   const PANEL_MODAL = "perf-adviser-modal";
+  let navSubscribed = false;
 
   // The panel uses Spotify's PopupModal, whose surface is translucent
   // (rgba(...,.7) plus a backdrop blur in Lucid). While our panel is open we
@@ -1481,6 +1482,7 @@
       start, stop, sync, clear, rollup,
       nav: {
         get marks() { return navMarks; },
+        get subscribed() { return navSubscribed; },
         get active() { return navActive ? { route: navActive.route, start: +navActive.start.toFixed(1), frames: navActive.frames.length } : null; },
         get recent() { return navRecent.slice(); },
         rows: navRows,
@@ -1495,14 +1497,29 @@
   lag.sync();
 
   // Route changes are the only navigation signal; no timer and no polling. The
-  // listener is installed once and does nothing while navTiming is off.
-  try {
-    if (Spicetify.Platform && Spicetify.Platform.History && Spicetify.Platform.History.listen) {
-      Spicetify.Platform.History.listen((location) => {
+  // listener is installed once and does nothing while navTiming is off. On a
+  // real client Spicetify.Platform.History.listen can appear a moment after
+  // extensions start, and a subscription made too early silently sees nothing,
+  // so retry briefly until it exists (then stop; no recurring timer).
+  function subscribeNav() {
+    try {
+      const H = Spicetify.Platform && Spicetify.Platform.History;
+      if (!H || typeof H.listen !== "function") return false;
+      H.listen((location) => {
         if (state.navTiming) lag.nav.mark(location && location.pathname);
       });
-    }
-  } catch (e) { /* ignore */ }
+      navSubscribed = true;
+      return true;
+    } catch (e) { return false; }
+  }
+  if (!subscribeNav()) {
+    let navTries = 0;
+    const tick = () => {
+      if (subscribeNav() || ++navTries >= 20) return;
+      setTimeout(tick, 250);
+    };
+    setTimeout(tick, 250);
+  }
 
   // ---------------------------------------------------------------- environment
   function timeout(promise, ms, fallback) {
@@ -2384,14 +2401,23 @@
         "none over the " + AUTHOR.forcedMs + " ms threshold during the standard test");
 
     const rate = +((own ? own.ms : src ? src.totalMs : 0) / secs).toFixed(2);
-    const timedBy = own ? "timed by the Author mode wrappers, which is the only way to see handlers registered at startup" : "timed by the profiler, so startup handlers are not included";
+    const regs = inv ? inv.intervals.length + " interval(s), " + inv.observers.length + " observer(s), " + inv.listeners.length + " hot listener(s)" : "";
+    const timedBy = own
+      ? "timed by the Author mode wrappers, so handlers registered at startup are included"
+      : inv && (inv.intervals.length || inv.observers.length || inv.listeners.length)
+        ? "no callback from this source ran in the test window; it registered " + regs
+        : "no callback from this source ran and no registration was captured (it may have loaded before Perf Adviser)";
     add("callback", "Callback time per second of test", rate > AUTHOR.callbackMsPerSec.warn ? "FAIL" : rate > AUTHOR.callbackMsPerSec.pass ? "WARN" : "PASS",
       rate + " ms/s (" + timedBy + "); pass < " + AUTHOR.callbackMsPerSec.pass + ", warn " + AUTHOR.callbackMsPerSec.pass + "-" + AUTHOR.callbackMsPerSec.warn + ", fail > " + AUTHOR.callbackMsPerSec.warn + " over " + secs.toFixed(1) + " s");
 
     const intervalCalls = own && own.kinds.interval ? own.kinds.interval.calls : src ? src.intervalCalls || 0 : 0;
     const intRate = +(intervalCalls / secs).toFixed(2);
+    const periods = inv ? inv.intervals.map((i) => +i.ms || 0) : [];
+    const shortest = periods.length ? Math.min(...periods) : null;
+    const windowMs = Math.round(secs * 1000);
     add("intervals", "Interval callback rate", intRate > AUTHOR.intervalsPerSec.warn ? "FAIL" : intRate > AUTHOR.intervalsPerSec.pass ? "WARN" : "PASS",
-      intRate + "/s measured" + (inv ? " (" + inv.intervals.length + " registered from this source)" : "") +
+      intRate + "/s measured" + (inv ? " (" + inv.intervals.length + " registered" + (shortest ? ", shortest period " + shortest + " ms" : "") + ")" : "") +
+      (shortest && shortest > windowMs ? "; every registered period is longer than the " + windowMs + " ms test, so 0/s is expected" : "") +
       " (pass <= " + AUTHOR.intervalsPerSec.pass + ", warn <= " + AUTHOR.intervalsPerSec.warn + ", fail above)");
 
     const overall = checks.some((c) => c.result === "FAIL") ? "fail" : checks.some((c) => c.result === "WARN") ? "warn" : "pass";
@@ -3151,6 +3177,10 @@
     navCard.appendChild(navTop);
 
     if (state.navTiming) {
+      if (!lag.nav.subscribed) {
+        navCard.appendChild(h("div", `font-size:12px;color:${C.amber};line-height:1.45;`,
+          "Route listener not attached yet: Spicetify.Platform.History.listen was not ready when the extension loaded. It retries for about 5 s after load and needs a Spotify reload after that. Nothing is recorded until it attaches."));
+      }
       const rows = lag.nav.rows();
       if (rows.length) {
         navCard.appendChild(miniTable(
