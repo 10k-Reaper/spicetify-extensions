@@ -3461,11 +3461,14 @@
         rollup: lag.rollup,
         nav: {
           get marks() { return lag.nav.marks; },
+          get subscribed() { return lag.nav.subscribed; },
+          get active() { return lag.nav.active; },
           get recent() { return lag.nav.recent; },
           rows: lag.nav.rows,
           mark: lag.nav.mark,
           finalize: lag.nav.finalize,
           clear: lag.nav.clear,
+          windowMs: lag.nav.windowMs,
         },
       },
       author: {
