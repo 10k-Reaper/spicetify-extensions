@@ -33,7 +33,7 @@ await page.evaluateOnNewDocument(() => {
       ZoomAPI: { getZoomLevel: async () => 0, setZoomLevel: async () => {} },
     },
     PopupModal: {
-      display: ({ content }) => { const host = document.getElementById("host"); host.textContent = ""; host.appendChild(content); },
+      display: ({ content }) => { window.__displayCount = (window.__displayCount || 0) + 1; const host = document.getElementById("host"); host.textContent = ""; host.appendChild(content); },
       hide: () => { const host = document.getElementById("host"); if (host) host.textContent = ""; },
     },
     Topbar: { Button: function Button(n) { this.name = n; } },
@@ -57,6 +57,10 @@ const clickText = (text) => page.evaluate((t) => {
 await page.evaluate(() => { document.querySelector(".perf-adviser-root").scrollTop = 500; });
 await new Promise((r) => setTimeout(r, 120));
 const scrolled = await page.evaluate(() => document.querySelector(".perf-adviser-root").scrollTop);
+const firstOpen = await page.evaluate(() => ({
+  displays: window.__displayCount || 0,
+  unmeasured: document.querySelector(".perf-adviser-root").textContent.includes("Nothing has been measured yet"),
+}));
 await clickText("Bisect");
 await new Promise((r) => setTimeout(r, 120));
 const bisectView = await page.evaluate(() => {
@@ -67,6 +71,7 @@ const bisectView = await page.evaluate(() => {
     hiddenChildren: [...root.children].filter((c) => c.style.display === "none").length,
     hasBisect: root.textContent.includes("Guided bisect"),
     reportHidden: !!report,
+    displays: window.__displayCount || 0,
   };
 });
 await clickText("Report");
@@ -74,10 +79,11 @@ await new Promise((r) => setTimeout(r, 120));
 const backToReport = await page.evaluate(() => ({
   scroll: document.querySelector(".perf-adviser-root").scrollTop,
   view: document.querySelector(".perf-adviser-root").dataset.view,
+  displays: window.__displayCount || 0,
 }));
 
-// "Measure again" hides the modal, benchmarks, then rebuilds the panel.
-const clicked = await clickText("Measure again");
+// "Measure" hides the modal, benchmarks, then reopens the panel.
+const clicked = await clickText("Measure");
 await page.waitForFunction(() => {
   const root = document.querySelector(".perf-adviser-root");
   return !!root && root.dataset.view === "report" && !window.__busyMarker;
@@ -85,19 +91,20 @@ await page.waitForFunction(() => {
 await new Promise((r) => setTimeout(r, 500));
 const afterMeasure = await page.evaluate(() => {
   const root = document.querySelector(".perf-adviser-root");
-  return { exists: !!root, scroll: root ? root.scrollTop : null, view: root ? root.dataset.view : null };
+  return { exists: !!root, scroll: root ? root.scrollTop : null, view: root ? root.dataset.view : null, displays: window.__displayCount || 0 };
 });
 
-console.log(JSON.stringify({ scrolled, bisectView, backToReport, clicked, afterMeasure }, null, 2));
+console.log(JSON.stringify({ scrolled, firstOpen, bisectView, backToReport, clicked, afterMeasure }, null, 2));
 await browser.close();
 server.close();
 
 const ok =
   scrolled === 500 &&
+  firstOpen.displays === 1 && firstOpen.unmeasured &&
   bisectView.hasBisect && bisectView.reportHidden && bisectView.hiddenChildren === 1 &&
-  bisectView.rootScroll === 0 &&
-  backToReport.scroll === 500 && backToReport.view === "report" &&
+  bisectView.rootScroll === 0 && bisectView.displays === 1 &&
+  backToReport.scroll === 500 && backToReport.view === "report" && backToReport.displays === 1 &&
   clicked === true &&
-  afterMeasure.exists && afterMeasure.view === "report" &&
+  afterMeasure.exists && afterMeasure.view === "report" && afterMeasure.displays === 2 &&
   Math.abs(afterMeasure.scroll - 500) <= 2;
 process.exit(ok ? 0 : 1);

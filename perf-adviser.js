@@ -100,9 +100,11 @@
   //    install/uninstall buttons use the same class and must not be touched).
   //    Measured +38.5 fps median (3 paired 8 s runs, pointer on a card
   //    play button so its tooltip is mounted).
+  //    The class goes on the Home page root, not <html>: scrolling anything
+  //    else (Now Playing lyrics, a playlist, Library) must not hide it.
   const CARDPLAY_CSS = [
-    "/* Perf Adviser fix 2: hide the Home card play button only while scrolling. */",
-    "html." + SCROLL_CLASS + " [data-testid=\"home-page\"] .main-card-PlayButtonContainer { display: none !important; }",
+    "/* Perf Adviser fix 2: hide the Home card play button only while Home scrolls. */",
+    "[data-testid=\"home-page\"]." + SCROLL_CLASS + " .main-card-PlayButtonContainer { display: none !important; }",
   ].join("\n");
 
   // 3. OPT-IN override. Many themes/snippets put a slow full rotation on
@@ -339,7 +341,7 @@
     let el = document.getElementById(FIX_ID);
     if (!blocks.length) {
       if (el) el.remove();
-      document.documentElement.classList.remove(SCROLL_CLASS);
+      clearScrollClass();
       return;
     }
     if (!el) {
@@ -348,12 +350,12 @@
       (document.head || document.documentElement).appendChild(el);
     }
     el.textContent = blocks.join("\n");
-    if (state.cssOff || !state.cardPlayFix) document.documentElement.classList.remove(SCROLL_CLASS);
+    if (state.cssOff || !state.cardPlayFix) clearScrollClass();
   }
   function clearInjectedFixes() {
     const el = document.getElementById(FIX_ID);
     if (el) el.remove();
-    document.documentElement.classList.remove(SCROLL_CLASS);
+    clearScrollClass();
   }
   applyInjectedFixes();
 
@@ -389,9 +391,13 @@
 
   function skinModal(attempt) {
     const nodes = document.querySelectorAll(".GenericModal.spicetify-popup");
-    const modal = nodes[nodes.length - 1];
+    let modal = null;
+    for (const n of nodes) if (n.querySelector(".perf-adviser-root")) modal = n;
+    if (!modal && panelRoot && panelRoot.isConnected) {
+      try { modal = panelRoot.closest(".GenericModal"); } catch (e) { modal = null; }
+    }
     // PopupModal may mount a tick after display() returns; wait for our content.
-    if (!modal || !(modal.textContent || "").includes("Runtime CSS patches")) {
+    if (!modal) {
       if ((attempt || 0) < 10) setTimeout(() => skinModal((attempt || 0) + 1), 60);
       return;
     }
@@ -438,6 +444,15 @@
   const PEEK_ANCHOR = "perf-adviser-peek-anchor";
   const PEEK_WRAP_SEL = ":has(> .track-peek)";
   const PEEK_ANCHOR_SEL = ':has(> [data-testid="player-controls"] .track-peek)';
+
+  // Rules that only match while the pointer or keyboard focus is on something
+  // must never be parked. Spotify styles hover states with selectors such as
+  // ".YourLibraryX:hover .collapseButton .label" and
+  // ".trackListContainer:has(.header:hover) .reveal": at scan time they match
+  // nothing, so parking them makes the hover effect stall (Library "Collapse
+  // Your Library" never appears) or replay (Go back keeps sliding). A parked
+  // rule is only restored by the next scan, which is far too late for hover.
+  const VOLATILE_STATE_RE = /:(hover|focus|focus-visible|focus-within|active|target|visited)\b/i;
 
   const runtime = {
     parked: [],          // { rule, original, sentinel }
@@ -768,7 +783,7 @@
       let sel = "";
       try { sel = p.rule.selectorText; } catch (e) { continue; }
       if (sel === p.sentinel) {
-        if (matchesAny(p.original) > 0) {
+        if (VOLATILE_STATE_RE.test(p.original) || matchesAny(p.original) > 0) {
           try { p.rule.selectorText = p.original; } catch (e) { /* ignore */ }
         }
       } else if (sel === p.original) {
@@ -786,6 +801,7 @@
       if (tracked.has(rule)) return;
       if (sel === "." + PEEK_ANCHOR || sel === "." + PEEK_WRAP) return;
       if (sel.startsWith(PARK_PREFIX)) return;
+      if (VOLATILE_STATE_RE.test(sel)) { live++; return; }
       if (matchesAny(sel) > 0) { live++; return; }
       const original = sel;
       const sentinel = PARK_PREFIX + (++runtime.seq);
@@ -846,14 +862,44 @@
   setTimeout(() => scheduleScan(0), 5000);
 
   // Scroll-scoped card play button: one class toggle at the start and end of a
-  // scroll, instead of the tooltip's ~1500 inline-style writes per 4 s.
+  // Home scroll, instead of the tooltip's ~1500 inline-style writes per 4 s.
+  // The class must only follow the Home page: capturing scroll/wheel events
+  // also sees Now Playing lyrics, playlists and the Library sidebar, and adding
+  // the class for those hid the Home play button for no reason.
   let scrollTimer = null;
-  function onScrollSignal() {
+  let scrollHost = null;
+  let scrollSuppressUntil = 0;
+
+  function clearScrollClass() {
+    for (const el of document.querySelectorAll("." + SCROLL_CLASS)) el.classList.remove(SCROLL_CLASS);
+    scrollHost = null;
+  }
+
+  function homeScroller(target) {
+    const home = document.querySelector('[data-testid="home-page"]');
+    if (!home || !target) return null;
+    if (target === document || target === document.documentElement || target === document.scrollingElement) return home;
+    if (target.nodeType !== 1) return null;
+    if (target === home || home.contains(target) || target.contains(home)) return home;
+    return null;
+  }
+
+  function onScrollSignal(ev) {
     if (!state.cardPlayFix || state.cssOff) return;
-    const root = document.documentElement;
-    if (!root.classList.contains(SCROLL_CLASS)) root.classList.add(SCROLL_CLASS);
+    if (performance.now() < scrollSuppressUntil) return;
+    const host = homeScroller(ev.target);
+    if (!host) return;
+    if (!host.classList.contains(SCROLL_CLASS)) host.classList.add(SCROLL_CLASS);
+    scrollHost = host;
     clearTimeout(scrollTimer);
-    scrollTimer = setTimeout(() => root.classList.remove(SCROLL_CLASS), 180);
+    scrollTimer = setTimeout(() => {
+      if (scrollHost) scrollHost.classList.remove(SCROLL_CLASS);
+      scrollHost = null;
+      // Hiding the button can itself move layout if a theme makes the
+      // container static; that produces one more scroll event. Ignore it so
+      // the class cannot toggle back on in a loop.
+      scrollSuppressUntil = performance.now() + 300;
+    }, 180);
   }
   try {
     document.addEventListener("scroll", onScrollSignal, { capture: true, passive: true });
@@ -874,11 +920,28 @@
   function notify(msg, isError) {
     try { Spicetify.showNotification(msg, !!isError, 4000); } catch (e) { /* ignore */ }
   }
+  // Reloads the Spotify window, which re-runs every extension from disk. This
+  // is the only reload that does not need the Spicetify CLI; it cannot pick up
+  // config changes made by `spicetify apply`.
+  function reloadSpotify() {
+    try { Spicetify.PopupModal.hide(); } catch (e) { /* ignore */ }
+    setTimeout(() => {
+      try { location.reload(); } catch (e) { /* ignore */ }
+    }, 150);
+  }
   function h(tag, css, text) {
     const node = document.createElement(tag);
     if (css) node.style.cssText = css;
     if (text != null) node.textContent = text;
     return node;
+  }
+  // One short, plain-language sentence stays visible; the implementation notes
+  // live behind a native <details> so they are available without being in the way.
+  function note(summaryText, technicalText) {
+    const d = h("details", "font-size:12px;color:" + C.sub + ";line-height:1.5;");
+    d.appendChild(h("summary", "cursor:pointer;color:" + C.sub + ";font-size:11px;", summaryText));
+    d.appendChild(h("div", "margin-top:5px;", technicalText));
+    return d;
   }
   const C = {
     text: "var(--spice-text, #fff)",
@@ -1882,7 +1945,7 @@
         live: runtime.live,
         mirrored: runtime.mirrored,
       },
-      scrollClassNow: document.documentElement.classList.contains(SCROLL_CLASS),
+      scrollClassNow: !!document.querySelector("." + SCROLL_CLASS),
       cardPlayPresent: !!document.querySelector(".main-card-PlayButtonContainer"),
       profRunning: prof.recording,
       profElapsed: prof.recording ? Math.round((performance.now() - prof.startedAt) / 1000) : null,
@@ -1915,16 +1978,37 @@
     const max = el ? Math.min(el.scrollHeight - el.clientHeight, 4000) : 0;
 
     return new Promise((resolve) => {
+      let done = false;
+      let stall = null;
+      // requestAnimationFrame stops completely while the Spotify window is
+      // hidden (minimized, or fully covered). Without this guard the promise
+      // never settles, Measure stays "running" forever and the panel never
+      // reopens. A frame gap this long cannot be a slow frame, only no frames.
+      const finish = (result) => {
+        if (done) return;
+        done = true;
+        if (stall) clearTimeout(stall);
+        if (obs) obs.disconnect();
+        if (el) el.scrollTop = prevScroll;
+        resolve(result);
+      };
+      const arm = () => {
+        if (stall) clearTimeout(stall);
+        if (done) return;
+        stall = setTimeout(() => finish({
+          fps: 0, p95: 0, slowPct: 0, longTaskCount: longTasks.length,
+          longestTaskMs: Math.max(0, ...longTasks), scrollable: !!el, stalled: true,
+        }), 1500);
+      };
       function tick(now) {
+        if (done) return;
         frames.push(now - last);
         last = now;
         const t = (now - start) / durationMs;
         if (t >= 1) {
-          if (obs) obs.disconnect();
-          if (el) el.scrollTop = prevScroll;
           const sorted = [...frames].sort((a, b) => a - b);
           const mean = frames.reduce((a, b) => a + b, 0) / frames.length;
-          resolve({
+          finish({
             fps: mean > 0 ? 1000 / mean : 0,
             p95: sorted[Math.floor(sorted.length * 0.95)] || 0,
             slowPct: 100 * frames.filter((f) => f > 33).length / frames.length,
@@ -1935,8 +2019,10 @@
           return;
         }
         if (el) el.scrollTop = (1 - Math.abs(2 * t - 1)) * max;
+        arm();
         requestAnimationFrame(tick);
       }
+      arm();
       requestAnimationFrame(tick);
     });
   }
@@ -1945,7 +2031,10 @@
     const rows = [];
     // Unmeasured warm-up: the first scroll after a reload is always slower, and
     // it also lets lazy-loaded shelves settle.
-    await measureOnce(1500);
+    const warm = await measureOnce(1500);
+    // No frames at all: the window is hidden, so there is nothing to measure.
+    // Bail out now instead of repeating the same empty run.
+    if (warm.stalled) return null;
     await sleep(400);
     for (let i = 0; i < runs; i++) {
       const r = await measureOnce(durationMs);
@@ -1988,14 +2077,9 @@
 
   function switchPanelView(view) {
     if (view === panelView) return;
-    if (panelRoot) panelScroll[panelView] = panelRoot.scrollTop;
+    savePanelScroll();
     panelView = view;
     showPanel();
-    const el = document.querySelector(".perf-adviser-root");
-    if (el) {
-      el.dataset.view = view;
-      el.scrollTop = panelScroll[view] || 0;
-    }
   }
 
   function buildBisectPanel(bBody, s) {
@@ -2011,7 +2095,11 @@
     }
     card.appendChild(top);
     card.appendChild(h("div", `font-size:12px;color:${C.sub};line-height:1.45;`,
-      "This panel never turns an extension on or off. It says which half to toggle, you apply that in Marketplace -> Installed, reload, and measure. Each change is compared with a noise band measured by two identical runs, so a difference smaller than that is never called a result."));
+      "When scrolling is slow and you have several extensions, this narrows down which one is responsible. It never turns anything on or off: it tells you which half to toggle in Marketplace -> Installed, then you reload and measure again. " +
+      "Each change is compared with a noise band measured by two identical runs, so a difference smaller than normal run-to-run variation is never called a result."));
+    card.appendChild(note("How a round works technically",
+      "The candidate list comes from Spicetify.Config.extensions or Marketplace, minus Perf Adviser. Baseline and calibration runs establish the spread between two identical measurements; every later round must beat that band. A round toggles half the remaining candidates, measures, and keeps the half that reproduced the change. One culprit per run; 'Find another' starts over with it excluded. " +
+      "Marketplace toggles only take effect after a reload, so each round needs one. Snippets and themes are not toggled by this workflow."));
 
     if (!bisect) {
       const names = extensionNames(s);
@@ -2050,6 +2138,9 @@
         const label = bisect.phase === "baseline" ? "Measure baseline" : bisect.phase === "calibrate" ? "Measure after reload" : "Measure this round";
         btns.appendChild(btn(label, () => runBisectMeasure(), true));
       }
+      if (bisect.phase === "calibrate" || (bisect.awaiting && bisect.pending)) {
+        btns.appendChild(btn("Reload Spotify", reloadSpotify));
+      }
       if (bisect.pending) btns.appendChild(btn("Copy instruction", () => copyText(bisectInstruction())));
       btns.appendChild(btn("Copy report", () => copyText(bisectReportText())));
       if (bisect.phase === "done") {
@@ -2073,17 +2164,6 @@
       rSec.appendChild(rCard);
       bBody.appendChild(rSec);
     }
-
-    const limSec = section("Limits of bisect");
-    const limCard = h("div", `background:${C.card};border-radius:12px;padding:12px 14px;font-size:11px;color:${C.sub};line-height:1.5;`);
-    limCard.textContent =
-      "One culprit per run: after a culprit is named, 'Find another' starts a new run with that extension excluded. " +
-      "A cost that only appears when two extensions are installed together can end as 'inconclusive' because every single toggle looks like noise. " +
-      "Marketplace toggles take effect after a Spotify reload, so each round needs a reload; the calibration measures that reload-to-reload spread on this machine before any round is judged. " +
-      "The extension list comes from Spicetify.Config.extensions or Marketplace, whichever is available; it starts from the assumption that every listed extension is enabled. " +
-      "Snippets and themes are not toggled by this workflow.";
-    limSec.appendChild(limCard);
-    bBody.appendChild(limSec);
   }
 
   // Thresholds are deliberately explicit so the README can quote the same
@@ -2736,12 +2816,19 @@
     root.addEventListener("scroll", () => { if (root.isConnected && root === panelRoot) panelScroll[root.dataset.view || "report"] = root.scrollTop; }, { passive: true });
 
     // header
-    const head = h("div", "display:flex;align-items:center;justify-content:space-between;gap:12px;");
+    const head = h("div", "display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;");
     const titleWrap = h("div", "display:flex;flex-direction:column;gap:2px;");
     titleWrap.appendChild(h("div", `font-size:12px;color:${C.sub};`, "v" + VERSION + " - " + (b ? b.route : s.route) + " - nothing is disabled automatically"));
-    titleWrap.appendChild(h("div", `font-size:11px;color:${C.sub};`, "Fixes are CSS injected by this extension. Extensions, snippets and themes are never changed."));
+    titleWrap.appendChild(h("div", `font-size:11px;color:${C.sub};`, "Find out what is slowing Spotify down and turn fixes on or off yourself. Extensions, snippets and themes are never changed."));
     head.appendChild(titleWrap);
-    head.appendChild(h("span", `font-size:11px;color:${C.sub};`, "no network"));
+    const headRight = h("div", "display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;");
+    headRight.appendChild(h("span", `font-size:11px;color:${C.sub};`, "no network"));
+    const reloadBtn = btn("Reload Spotify", reloadSpotify);
+    reloadBtn.style.fontSize = "11px";
+    reloadBtn.style.padding = "4px 9px";
+    reloadBtn.title = "Re-run extensions from disk. Does not run spicetify apply.";
+    headRight.appendChild(reloadBtn);
+    head.appendChild(headRight);
     root.appendChild(head);
 
     // report / bisect tabs; only one body is shown, both are built so switching
@@ -2789,11 +2876,14 @@
       score.appendChild(metrics);
     }
     const scoreBtns = h("div", "display:flex;gap:8px;margin-left:auto;align-self:center;");
-    scoreBtns.appendChild(btn("Measure again", () => runBench(true), true));
+    scoreBtns.appendChild(btn(b ? "Measure again" : "Measure", () => runBench(!!b), true));
     scoreBtns.appendChild(btn("Copy report", () => copyText(reportText(s, b, p))));
     score.appendChild(scoreBtns);
     body.appendChild(score);
-    if (b && b.runs === 1) {
+    if (!b) {
+      body.appendChild(h("div", `font-size:12px;color:${C.sub};margin-top:-8px;line-height:1.45;`,
+        "Nothing has been measured yet. Press Measure to run a 5-second scroll test on the page you are on; the panel closes while it scrolls and comes back with the result."));
+    } else if (b.runs === 1) {
       body.appendChild(h("div", `font-size:11px;color:${C.sub};margin-top:-8px;`, "One short run (after a warm-up). Home FPS also depends on where the mouse rests: over a card, Spotify's play-button tooltip churns every scroll frame. 'Measure again' runs 2 x 6 s."));
     }
 
@@ -2828,7 +2918,8 @@
     env.appendChild(row("Rotating cover", s.coverRotating
       ? (s.coverPause ? "paused by fix" : "animating") + (s.coverSource ? " - from " + s.coverSource.name : "")
       : "not present", s.coverRotating && !s.coverPause ? C.amber : C.green));
-    env.appendChild(row("Injected CSS", s.cssOff ? "disabled" : "active", s.cssOff ? C.amber : C.green));
+    env.appendChild(row("Injected CSS", s.cssOff ? "paused by master switch" : "active", s.cssOff ? C.amber : C.green));
+    env.appendChild(row("Runtime patches", s.cssOff ? "paused by master switch" : s.runtimePatch ? "on" : "off", s.cssOff ? C.amber : s.runtimePatch ? C.green : C.sub));
     env.appendChild(row("CSS editor", s.cssEditorChars == null ? "unknown" : s.cssEditorChars ? s.cssEditorChars + " chars" : "empty", s.cssEditorChars ? C.amber : C.green));
     env.appendChild(row("Page zoom", (s.zoom.level == null ? "unknown" : zoomPct(s.zoom.level)) + " / DPR " + s.zoom.dpr.toFixed(3), s.zoom.level === 0 ? C.green : C.amber));
     body.appendChild(env);
@@ -2852,8 +2943,39 @@
     body.appendChild(cssSec);
 
     // fixes
-    const fixes = section("Fixes (measured)");
+    const fixes = section("Fixes you can try");
     const fixCard = h("div", `display:flex;flex-direction:column;gap:0;background:${C.card};border-radius:12px;padding:4px 14px;`);
+
+    // Master pause: one switch for every injected rule and the runtime patches.
+    // Kept at the top so a paused panel says so before the individual fixes.
+    const killRow = h("div", "display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:10px 0;border-radius:10px;");
+    const killText = h("div", "display:flex;flex-direction:column;gap:3px;flex:1 1 300px;min-width:240px;");
+    killText.appendChild(h("div", `font-size:13px;font-weight:600;color:${C.text};`, "Pause all fixes"));
+    killText.appendChild(h("div", `font-size:12px;color:${C.sub};line-height:1.45;`,
+      s.cssOff
+        ? "Every fix and runtime patch is paused right now. Your individual choices are remembered; Resume puts back exactly what was on."
+        : "Turns off every fix and runtime patch at once, without forgetting which ones you chose. Handy for comparing with unmodified Spotify."));
+    killRow.appendChild(killText);
+    if (s.cssOff) {
+      killRow.appendChild(btn("Resume all fixes", () => {
+        state.cssOff = false;
+        saveState(state);
+        applyInjectedFixes();
+        syncRuntimePatches();
+        notify("Perf Adviser: all fixes resumed");
+        refresh();
+      }, true));
+    } else {
+      killRow.appendChild(btn("Pause all fixes", () => {
+        state.cssOff = true;
+        saveState(state);
+        applyInjectedFixes();
+        syncRuntimePatches();
+        notify("Perf Adviser: all fixes paused");
+        refresh();
+      }));
+    }
+    fixCard.appendChild(killRow);
 
     const setFix = (key, value, message) => {
       state[key] = value;
@@ -2867,15 +2989,25 @@
 
     const addToggle = (opts) => {
       const row = h("div", "display:flex;align-items:center;gap:12px;justify-content:space-between;flex-wrap:wrap;padding:10px 0;border-top:1px solid rgba(128,128,128,.18);");
-      const text = h("div", "display:flex;flex-direction:column;gap:3px;flex:1 1 320px;min-width:240px;");
+      const text = h("div", "display:flex;flex-direction:column;gap:4px;flex:1 1 320px;min-width:240px;");
       const titleLine = h("div", "display:flex;align-items:center;gap:8px;flex-wrap:wrap;");
       titleLine.appendChild(h("div", `font-size:13px;color:${C.text};`, opts.title));
       if (opts.recommended) titleLine.appendChild(pill("recommended", C.green));
       titleLine.appendChild(pill(opts.on ? "on" : "off", opts.on ? C.green : C.sub));
+      if (s.cssOff) titleLine.appendChild(pill("paused", C.amber));
       text.appendChild(titleLine);
-      text.appendChild(h("div", `font-size:12px;color:${C.sub};line-height:1.4;`, opts.detail));
+      text.appendChild(h("div", `font-size:12px;color:${C.sub};line-height:1.45;`, opts.detail));
+      if (opts.technical) text.appendChild(note("What this changes technically", opts.technical));
       row.appendChild(text);
-      row.appendChild(btn(opts.action, opts.onClick, !opts.on && !!opts.recommended));
+      // While the master switch is off, per-fix actions would silently resume
+      // every fix. Show the paused state and leave the decision to the master.
+      const action = s.cssOff ? btn("Paused", () => {}, false) : btn(opts.action, opts.onClick, !opts.on && !!opts.recommended);
+      if (s.cssOff) {
+        action.disabled = true;
+        action.style.opacity = ".55";
+        action.style.cursor = "default";
+      }
+      row.appendChild(action);
       return row;
     };
 
@@ -2883,8 +3015,8 @@
     const presetRow = h("div", "display:flex;align-items:center;gap:12px;justify-content:space-between;flex-wrap:wrap;padding:10px 0;");
     const presetText = h("div", "display:flex;flex-direction:column;gap:3px;flex:1 1 320px;min-width:240px;");
     presetText.appendChild(h("div", `font-size:13px;font-weight:600;color:${C.text};`, "Recommended preset"));
-    presetText.appendChild(h("div", `font-size:12px;color:${C.sub};line-height:1.4;`,
-      "Turns on the two fixes that measured a clear win: sticky header blur and the Home card button. Rotating cover is opt-in because an installed snippet or theme usually adds it; removing that source is better than overriding it."));
+    presetText.appendChild(h("div", `font-size:12px;color:${C.sub};line-height:1.45;`,
+      "The two fixes with a clear measured win: the top-bar blur and the Home card button. If you only do one thing, do this. The rotating-cover switch stays off because a snippet or theme usually adds that spin; removing the source is better than overriding it."));
     presetRow.appendChild(presetText);
     if (recOn) {
       presetRow.appendChild(pill("applied", C.green));
@@ -2909,8 +3041,9 @@
       recommended: true,
       on: !!s.headerFix,
       detail: s.headerFix
-        ? "Backdrop blur removed and replaced with an opaque theme background. Measured +5.8 fps on top of the card fix."
-        : "Spotify's blurred sticky header is active. Removing it measured +5.8 fps on top of the card fix.",
+        ? "The blur behind the top bar is off. Scrolling under it no longer forces Spotify to recompute that blur."
+        : "Spotify blurs whatever scrolls under the top bar. Removing that blur measured about +6 fps on top of the Home card fix.",
+      technical: "Sets --header-filters:none and gives five Spotify header surfaces an opaque theme colour (top bar, search category bar, Home filter chips, track-list header and stuck header). Measured +5.8 fps on top of the Home card fix; +1.5 fps within noise on its own. Reversible CSS only, no Spotify code is patched.",
       action: s.headerFix ? "Restore blur" : "Remove blur",
       onClick: () => setFix("headerFix", !s.headerFix, s.headerFix ? "Perf Adviser: header blur restored" : "Perf Adviser: header blur removed"),
     }));
@@ -2921,8 +3054,9 @@
       recommended: true,
       on: !!s.cardPlayFix,
       detail: s.cardPlayFix
-        ? "Hidden only while scrolling, so its tooltip stops repositioning every frame. Usable at rest; Home only. Measured +38.5 fps median."
-        : "Spotify repositions this tooltip on every scroll frame while the pointer rests on a card. Measured a +38.5 fps median gain.",
+        ? "The play button over album covers is hidden only while Home is scrolling, so its tooltip stops moving every frame. It is back as soon as you stop."
+        : "Spotify repositions the card play button's tooltip on every scroll frame. Hiding the button while scrolling measured a large fps gain on Home.",
+      technical: "Adds a class to [data-testid=home-page] for 180 ms after a scroll, wheel or touchmove that starts inside Home, and hides .main-card-PlayButtonContainer only under that class. Measured +38.5 fps median (3 paired 8 s runs, pointer resting on a card so its tooltip was mounted). Marketplace buttons use the same class but are outside Home; Now Playing lyrics, playlists and Library scrolling do not trigger it.",
       action: s.cardPlayFix ? "Show button" : "Hide while scrolling",
       onClick: () => setFix("cardPlayFix", !s.cardPlayFix, s.cardPlayFix ? "Perf Adviser: play button always shown" : "Perf Adviser: play button hidden while scrolling"),
     }));
@@ -2934,12 +3068,13 @@
       title: "Rotating cover art (opt-in)",
       on: !!s.coverPause,
       detail: s.coverPause
-        ? "Paused by this extension. " + (coverSrcName ? coverSrcName + " adds the rotation; disabling it is the cleaner fix." : "Disabling the snippet/theme that adds the rotation is the cleaner fix.")
+        ? "The cover is held still. " + (coverSrcName ? coverSrcName + " adds the rotation; turning that off is the cleaner fix." : "Turning off the snippet or theme that adds the rotation is the cleaner fix.")
         : (s.coverRotating
           ? (coverSrcName
-            ? coverSrcName + " rotates .cover-art. Disabling it in " + coverWhere + " removes the cost at the source. Pausing here is only an override; measured +37.1 fps median."
-            : "An installed snippet/theme rotates .cover-art. Disabling it is the cleaner fix; pausing here measured +37.1 fps median.")
-          : "No rotating cover animation detected right now, so this toggle would do nothing."),
+            ? coverSrcName + " is spinning the cover. Turning it off in " + coverWhere + " removes the cost at the source; this switch is only an override."
+            : "A snippet or theme is spinning the cover. Turning it off is the cleaner fix; this switch is only an override.")
+          : "No spinning cover was detected, so this switch would do nothing right now."),
+      technical: "Sets animation-play-state:paused on .cover-art and the Now Playing cover pseudo-elements. Chromium cannot composite this rotation because the same element also carries clip-path and border-radius, so it runs on the main thread every frame. Measured +37.1 fps median (3 paired 8 s runs) while a rotation was active. Cosmetic override only; the detected source is named above.",
       action: s.coverPause ? "Resume rotation" : "Pause rotation",
       onClick: () => setFix("coverPause", !s.coverPause, s.coverPause ? "Perf Adviser: cover rotation resumed" : "Perf Adviser: cover rotation paused"),
     }));
@@ -2948,16 +3083,18 @@
     fixCard.appendChild(addToggle({
       title: "Theme tweaks",
       on: !!s.themeTweaks,
-      detail: "Cosmetic only: marketplace card border, active-button colour and a 72 px player bar. Not a performance fix; off by default.",
+      detail: "Cosmetic only: a Marketplace card border, a different active-button colour and a 72 px player bar. It does not make Spotify faster.",
+      technical: "Three theme-specific declarations that used to live in the CSS editor: .marketplace-card--installed gets a purple border, --spice-button-active is overridden and the player bar is fixed at 72 px. Not part of the recommended preset and never applied automatically.",
       action: s.themeTweaks ? "Turn off" : "Turn on",
       onClick: () => setFix("themeTweaks", !s.themeTweaks, s.themeTweaks ? "Perf Adviser: theme tweaks off" : "Perf Adviser: theme tweaks on"),
     }));
 
     // page zoom
     const zoomRow = h("div", "display:flex;align-items:center;gap:12px;justify-content:space-between;flex-wrap:wrap;border-top:1px solid rgba(128,128,128,.18);padding:10px 0;");
-    const zoomText = h("div", "display:flex;flex-direction:column;gap:3px;flex:1 1 320px;min-width:240px;");
+    const zoomText = h("div", "display:flex;flex-direction:column;gap:4px;flex:1 1 320px;min-width:240px;");
     zoomText.appendChild(h("div", `font-size:13px;color:${C.text};`, "Page zoom"));
-    zoomText.appendChild(h("div", `font-size:12px;color:${C.sub};`, "Reset to 100% (fixes the whole-UI-shrink bug; not an fps fix)"));
+    zoomText.appendChild(h("div", `font-size:12px;color:${C.sub};line-height:1.45;`, "Resets the whole Spotify window to 100%. This repairs the shrunken-UI bug; it is not a speed fix."));
+    zoomText.appendChild(note("What this changes technically", "Calls Spicetify.Platform.ZoomAPI.setZoomLevel(0). Zoom is stored by Spotify itself, so it stays at 100% until you zoom again. It does not change the operating-system display scale."));
     zoomRow.appendChild(zoomText);
     if (s.zoom.level != null && s.zoom.level !== 0) {
       zoomRow.appendChild(btn("Reset zoom to 100%", async () => {
@@ -2974,31 +3111,6 @@
       zoomRow.appendChild(pill("100%", C.green));
     }
     fixCard.appendChild(zoomRow);
-
-    // master kill switch
-    const killRow = h("div", "display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;border-top:1px solid rgba(128,128,128,.18);padding:10px 0;");
-    killRow.appendChild(h("div", `font-size:12px;color:${C.sub};line-height:1.4;flex:1 1 280px;`,
-      s.cssOff ? "All injected fixes are off. Nothing is hidden or paused." : "Turn every injected rule off at once (state is kept, so you can switch back)."));
-    if (s.cssOff) {
-      killRow.appendChild(btn("Enable everything", () => {
-        state.cssOff = false;
-        saveState(state);
-        applyInjectedFixes();
-        syncRuntimePatches();
-        notify("Perf Adviser: fixes enabled");
-        refresh();
-      }, true));
-    } else {
-      killRow.appendChild(btn("Disable all fixes", () => {
-        state.cssOff = true;
-        saveState(state);
-        applyInjectedFixes();
-        syncRuntimePatches();
-        notify("Perf Adviser: all fixes disabled");
-        refresh();
-      }));
-    }
-    fixCard.appendChild(killRow);
     fixes.appendChild(fixCard);
     body.appendChild(fixes);
 
@@ -3007,22 +3119,25 @@
     const rtSec = section("Runtime CSS patches");
     const rtCard = h("div", `display:flex;flex-direction:column;gap:0;background:${C.card};border-radius:12px;padding:4px 14px;`);
     const rtRow = h("div", "display:flex;align-items:center;gap:12px;justify-content:space-between;flex-wrap:wrap;padding:10px 0;");
-    const rtText = h("div", "display:flex;flex-direction:column;gap:3px;flex:1 1 320px;min-width:240px;");
+    const rtText = h("div", "display:flex;flex-direction:column;gap:4px;flex:1 1 320px;min-width:240px;");
     const rtTitle = h("div", "display:flex;align-items:center;gap:8px;flex-wrap:wrap;");
-    rtTitle.appendChild(h("div", `font-size:13px;color:${C.text};`, "Park idle :has() rules"));
+    rtTitle.appendChild(h("div", `font-size:13px;color:${C.text};`, "Rewrite unused :has() rules"));
     rtTitle.appendChild(pill(rt.active ? "on" : "off", rt.active ? C.green : C.sub));
+    if (s.cssOff) rtTitle.appendChild(pill("paused", C.amber));
     rtTitle.appendChild(pill(rt.parked + " parked", rt.parked ? C.green : C.sub));
     if (rt.mirrored) rtTitle.appendChild(pill(rt.mirrored + " mirrored", C.blue));
     rtText.appendChild(rtTitle);
-    rtText.appendChild(h("div", `font-size:12px;color:${C.sub};line-height:1.4;`,
-      "Chromium treats any live :has() rule as document-wide, so a hover can restyle more than the hovered control. " +
-      "This parks rules that match nothing and restores each when its target appears; " +
-      "track-peek's two global :has() anchors are mirrored with a class. " +
-      "Measured: a wide card hover restyles 951 elements with the rules live and 378 parked; the player bar 938 -> 381. " +
-      "Spotify's own card re-render is not removed. " +
-      (rt.live ? rt.live + " :has() rule(s) are in use and untouched." : "")));
+    rtText.appendChild(h("div", `font-size:12px;color:${C.sub};line-height:1.45;`,
+      "Makes Spotify's own styles cheaper to check when you move the mouse over things. It rewrites unused :has() selectors at runtime and puts them back as soon as their target appears; no CSS is added to the page. " +
+      "If a hover effect ever behaves strangely, turn this off first and see whether it goes away." +
+      (rt.live ? " " + rt.live + " :has() rule(s) are currently in use and are never rewritten." : "")));
+    rtText.appendChild(note("What this changes technically",
+      "Chromium treats any live :has() rule as document-wide, so a hover can restyle far more of the page than the hovered control. " +
+      "Rules that match nothing are given an inert selector (parked) and restored when a matching node appears; the two global track-peek anchors are mirrored with classes instead. " +
+      "Rules that depend on :hover, :focus, :active or :focus-within are never parked, because a hover cannot wait for a rescan. " +
+      "Measured: a wide card hover restyles 951 elements with the rules live and 378 parked; the player bar goes from 938 to 381. Spotify's own card re-render is not removed."));
     rtRow.appendChild(rtText);
-    rtRow.appendChild(btn(rt.active ? "Turn off" : "Turn on", () => {
+    const rtAction = s.cssOff ? btn("Paused", () => {}, false) : btn(rt.active ? "Turn off" : "Turn on", () => {
       state.runtimePatch = !state.runtimePatch;
       if (state.runtimePatch && state.cssOff) state.cssOff = false;
       saveState(state);
@@ -3030,20 +3145,28 @@
       syncRuntimePatches();
       notify(state.runtimePatch ? "Perf Adviser: runtime CSS patches on" : "Perf Adviser: runtime CSS patches off");
       refresh();
-    }, !rt.active));
+    }, !rt.active);
+    if (s.cssOff) {
+      rtAction.disabled = true;
+      rtAction.style.opacity = ".55";
+      rtAction.style.cursor = "default";
+    }
+    rtRow.appendChild(rtAction);
     rtCard.appendChild(rtRow);
     rtSec.appendChild(rtCard);
     body.appendChild(rtSec);
 
     // profiler
-    const profile = section("Profile (merged from Perf Tools)");
+    const profile = section("Profile a slow page");
     const pCard = h("div", `display:flex;flex-direction:column;gap:10px;background:${C.card};border-radius:12px;padding:12px 14px;`);
     const pTop = h("div", "display:flex;align-items:center;gap:12px;justify-content:space-between;flex-wrap:wrap;");
-    const pText = h("div", "display:flex;flex-direction:column;gap:2px;");
-    pText.appendChild(h("div", `font-size:13px;color:${C.text};`, "Attribute cost by extension/script"));
-    pText.appendChild(h("div", `font-size:12px;color:${C.sub};`, prof.recording
-      ? "Recording - scroll the slow page, then come back and press Stop."
-      : "Start, scroll the slow page for ~10 s, then Stop. Wrappers are installed only while recording."));
+    const pText = h("div", "display:flex;flex-direction:column;gap:4px;");
+    pText.appendChild(h("div", `font-size:13px;color:${C.text};`, "Attribute cost by extension or script"));
+    pText.appendChild(h("div", `font-size:12px;color:${C.sub};line-height:1.45;`, prof.recording
+      ? "Recording. Scroll the slow page, then click the Perf Adviser icon again and press Stop."
+      : "Start, scroll the slow page for about 10 seconds, then click the icon again and press Stop. The panel closes while it records."));
+    pText.appendChild(note("What recording does technically",
+      "Wraps timers, animation frames, event listeners and MutationObservers only while recording, then restores the originals. Cost is inclusive callback time plus time spent in forced layout reads, grouped by source file with call and max columns. It also records fps, long tasks and (where available) long-animation-frame script attribution. Everything stays in memory on this machine."));
     pTop.appendChild(pText);
     const pBtns = h("div", "display:flex;gap:8px;flex-wrap:wrap;");
     if (prof.recording) {
@@ -3102,12 +3225,15 @@
     lagText.appendChild(lagTitle);
     lagText.appendChild(h("div", `font-size:12px;color:${C.sub};line-height:1.45;`,
       !state.lagRecorder
-        ? "Off. Turn it on before the stutter, then come back here: it keeps the last 30 slow frames with the script file and blocking time for each. In-memory only, no timers, no wrappers, no network."
+        ? "Turn this on, reproduce the stutter, then come back here. It keeps the last 30 slow frames and names the script file that was blocking each one. Nothing leaves your machine."
         : lag.mode === "long-animation-frame"
-          ? "On. Newest slow frames first. Clicking anything in Spotify's own UI during the frame can appear as the invoker even when the cost is in another file; read the file column first."
+          ? "On. Scroll or click until it stutters, then read the tables below: newest slow frame first, with the script file that was blocking it."
           : lag.mode === "longtask"
-            ? "On, but this Spotify build only supports longtask entries: you get duration and the blocking window, not which script ran. Turn it off when you are done."
-            : "On, but this build supports neither long-animation-frame nor longtask, so nothing can be recorded."));
+            ? "On, but this Spotify build only reports how long each slow frame lasted, not which script ran. Turn it off when you are done."
+            : "On, but this build cannot record slow frames at all, so nothing will appear."));
+    lagText.appendChild(note("What this records technically",
+      "Uses the browser's long-animation-frame entries when available, otherwise longtask entries. In-memory ring buffer of 30 frames; each row has duration, blocking time, route and the top script by duration. No timers, no wrappers, no network. " +
+      "While on it shares one PerformanceObserver with route timing; while off that observer is disconnected."));
     lagTop.appendChild(lagText);
     lagTop.appendChild(btn(state.lagRecorder ? "Turn off" : "Turn on", () => {
       state.lagRecorder = !state.lagRecorder;
@@ -3163,8 +3289,11 @@
     navText.appendChild(navTitle);
     navText.appendChild(h("div", `font-size:12px;color:${C.sub};line-height:1.45;`,
       !state.navTiming
-        ? "Off. When on, each route change starts a 2 s window. Navigation cost = blocking time of the long frames that start in that window + time from the change to the end of the last one. It measures jank after the change, not download or first-paint time."
-        : "Cost = settle time (route change to the end of the last long frame that started within 2 s) + the blocking time of those frames. A clean change reads near zero; it is not a page-load timer."));
+        ? "Shows how much jank each page change causes. Turn it on, switch between Home, a playlist and Search, then come back."
+        : "On. Switch pages normally; each change is watched for 2 seconds. A clean change reads close to zero."));
+    navText.appendChild(note("What this measures technically",
+      "Cost = settle time (route change to the end of the last long frame that started within 2 s) + the blocking time of those frames. It measures jank after the change, not download or first-paint time. " +
+      "Rows are grouped by route with median, worst and top source. The History.listen subscription retries for about 5 s after load; if it never attached, the panel says so and a Spotify reload is needed."));
     navTop.appendChild(navText);
     navTop.appendChild(btn(state.navTiming ? "Turn off" : "Turn on", () => {
       state.navTiming = !state.navTiming;
@@ -3220,8 +3349,11 @@
       if (missing.length) topLine.appendChild(pill(missing.length + " not seen", C.amber));
       if (stale.length) topLine.appendChild(pill(stale.length + " stale", C.red));
       selCard.appendChild(topLine);
-      selCard.appendChild(h("div", `font-size:11px;color:${C.sub};line-height:1.45;`,
-        "Checked on " + health.route + " when the panel opened. OK = matched on its expected route; N/A here = wrong route, or the extension that owns it is not installed; NOT SEEN = expected here but not matched yet; STALE = matched on an earlier Spotify version, not on this one."));
+      selCard.appendChild(h("div", `font-size:12px;color:${C.sub};line-height:1.45;`,
+        "Spotify renames its CSS classes between releases. This checks whether the class names these fixes depend on still exist on this page."));
+      selCard.appendChild(note("How to read the table",
+        "Checked on " + health.route + " when the panel opened. OK = matched on its expected route; N/A here = wrong route, or the extension that owns it is not installed; NOT SEEN = expected here but not matched yet; STALE = matched on an earlier Spotify version, not on this one. " +
+        "The list is stored locally with the Spotify version, so a stale row is a concrete bug report: the matching fix would silently do nothing."));
       selCard.appendChild(miniTable(
         ["item", "selector", "expected", "status"],
         health.rows.map((r) => [
@@ -3255,31 +3387,34 @@
     aTitle.appendChild(pill(author.enabled ? "author mode on" : "author mode off", author.enabled ? C.green : C.sub));
     aText.appendChild(aTitle);
     aText.appendChild(h("div", `font-size:12px;color:${C.sub};line-height:1.45;`,
-      "A fixed Home scroll (" + (AUTHOR.scrollMs / 1000) + " s) plus " + (AUTHOR.idleMs / 1000) + " s idle, then PASS/WARN/FAIL for broad observers, forced reads over " +
-      AUTHOR.forcedMs + " ms and callback/interval rates. Heuristic, one machine, not a Spicetify or Marketplace certification. " +
-      "Author mode records who registered an interval, a MutationObserver (target and options) and hot listeners; during a check it also times those callbacks, including ones registered at startup. Nothing is timed while idle. It only sees extensions loaded after Perf Adviser."));
+      "For people writing or reviewing an extension. Turn Author mode on, reload Spotify, pick your extension below and press Run standard test. " +
+      "It scrolls Home once, waits, and reports PASS/WARN/FAIL for the usual causes of scroll jank: very broad observers, forced layout reads, and timers or event handlers that run too often. " +
+      "It only sees extensions loaded after Perf Adviser, and it is a debugging aid, not a certification."));
+    aText.appendChild(note("How it works and what the limits are",
+      "A fixed Home scroll (" + (AUTHOR.scrollMs / 1000) + " s) plus " + (AUTHOR.idleMs / 1000) + " s idle. Author mode records who registered an interval, a MutationObserver (target and options) and hot listeners, with stack attribution at registration time; during a check it also times those callbacks, including ones registered at startup. Nothing is timed while idle. " +
+      "Thresholds: callback PASS < " + AUTHOR.callbackMsPerSec.pass + " ms/s, FAIL > " + AUTHOR.callbackMsPerSec.warn + " ms/s; intervals PASS <= " + AUTHOR.intervalsPerSec.pass + "/s, FAIL > " + AUTHOR.intervalsPerSec.warn + "/s; any forced read > " + AUTHOR.forcedMs + " ms fails; any subtree observer on document/body/documentElement fails. " +
+      "Idle cost with Author mode on: " + author.stats.registrations + " registration(s), " + author.stats.loadMs + " ms of one-off wrapper time at load."));
     aTop.appendChild(aText);
-    if (!state.authorMode && !author.enabled) {
+    const authorDirty = !!state.authorMode !== !!author.enabled;
+    if (authorDirty) {
+      aTop.appendChild(pill(state.authorMode ? "on after reload" : "off after reload", C.amber));
+      aTop.appendChild(btn("Reload Spotify", reloadSpotify, true));
+    } else if (author.enabled) {
+      aTop.appendChild(btn("Turn off Author mode", () => {
+        state.authorMode = false;
+        saveState(state);
+        notify("Perf Adviser: Author mode saved off - reload Spotify to remove the inventory");
+        refresh();
+      }));
+    } else {
       aTop.appendChild(btn("Turn on Author mode", () => {
         state.authorMode = true;
         saveState(state);
         notify("Perf Adviser: Author mode saved - reload Spotify to install the inventory");
         refresh();
       }, true));
-    } else if (state.authorMode && !author.enabled) {
-      aTop.appendChild(pill("saved - reload Spotify", C.amber));
-    } else if (author.enabled) {
-      aTop.appendChild(btn("Turn off (reload)", () => {
-        state.authorMode = false;
-        saveState(state);
-        notify("Perf Adviser: Author mode off - reload Spotify to remove the inventory");
-        refresh();
-      }));
     }
     aCard.appendChild(aTop);
-
-    aCard.appendChild(h("div", `font-size:11px;color:${C.sub};`,
-      "Author mode idle cost: " + author.stats.registrations + " registration(s), " + author.stats.loadMs + " ms of one-off wrapper time at load; while idle each wrapped callback only pays one boolean check, and nothing is timed until a check runs."));
 
     if (author.enabled) {
       const srcSet = new Set();
@@ -3353,6 +3488,28 @@
     ));
     body.appendChild(foot);
 
+    // Never call PopupModal.display() while our modal is already open: it
+    // rebuilds the modal, which closes the panel (Report <-> Bisect used to do
+    // exactly that). Swap the content in the mounted root instead so the modal,
+    // its scroll box and its listeners survive a tab switch or a refresh.
+    const mounted = panelRoot && panelRoot.isConnected ? panelRoot : null;
+    if (mounted) {
+      // Replacing the clicked tab button inside the click handler makes
+      // Spotify's modal treat the now-detached target as an outside click and
+      // dismiss itself. Swap one tick later, after the event has finished.
+      setTimeout(() => {
+        if (!mounted.isConnected || panelRoot !== mounted) return;
+        mounted.dataset.view = panelView;
+        while (mounted.firstChild) mounted.removeChild(mounted.firstChild);
+        while (root.firstChild) mounted.appendChild(root.firstChild);
+        const restoreMounted = () => { mounted.scrollTop = panelScroll[panelView] || 0; };
+        restoreMounted();
+        try { requestAnimationFrame(() => requestAnimationFrame(restoreMounted)); } catch (e) { /* ignore */ }
+        skinModal();
+      }, 0);
+      return;
+    }
+
     Spicetify.PopupModal.display({ title: "Performance Adviser", content: root, isLarge: true });
     panelRoot = root;
     // A rebuild from a measurement, a tab switch or a refresh must not jump the
@@ -3375,17 +3532,30 @@
   async function runBench(full) {
     if (busy) return;
     busy = true;
-    try {
-      savePanelScroll();
+    savePanelScroll();
     try { Spicetify.PopupModal.hide(); } catch (e) { /* ignore */ }
-    } catch (e) { /* ignore */ }
     notify("Perf Adviser: measuring " + (full ? "2 x 6 s" : "5 s") + " - the page will scroll");
     await sleep(600);
-    const b = await benchmark(full ? 6000 : 5000, full ? 2 : 1);
-    const s = await scan();
-    last = { scan: s, bench: b, prof: last ? last.prof : null };
-    busy = false;
-    showPanel();
+    try {
+      const b = await benchmark(full ? 6000 : 5000, full ? 2 : 1);
+      const s = await scan();
+      if (b) {
+        last = { scan: s, bench: b, prof: last ? last.prof : null };
+      } else {
+        // The window was hidden for the whole run, so there are no frames to
+        // average. Keep the previous result instead of erasing it.
+        last = { scan: s, bench: last ? last.bench : null, prof: last ? last.prof : null };
+        notify("Perf Adviser: nothing was measured because the Spotify window was hidden. Keep it visible and press Measure again.", true);
+        return;
+      }
+    } catch (e) {
+      notify("Perf Adviser: measurement failed - " + (e && e.message ? e.message : String(e)), true);
+    } finally {
+      // Always reopen, including after a failed run. Leaving the panel closed
+      // was the other half of the "measure closes the popup" bug.
+      busy = false;
+      if (last) showPanel();
+    }
     if (!full) notify("Perf Adviser: click 'Measure again' for a longer, steadier run");
   }
 
@@ -3401,22 +3571,10 @@
     if (busy) { notify("Perf Adviser is already measuring"); return; }
     busy = true;
     try {
+      // Opening the panel only scans. Measuring is a deliberate action: the
+      // icon click must not scroll the page or close the panel for 7 seconds.
       const s = await scan();
-      if (prof.recording) {
-        last = { scan: s, bench: last ? last.bench : null, prof: last ? last.prof : null };
-        busy = false;
-        showPanel();
-        return;
-      }
-      if (last && (last.bench || last.prof)) {
-        last = { scan: s, bench: last.bench, prof: last.prof, when: Date.now() };
-        busy = false;
-        showPanel();
-        return;
-      }
-      notify("Perf Adviser: measuring (about 7 s)...");
-      const b = await benchmark(5000, 1);
-      last = { scan: s, bench: b, prof: null, when: Date.now() };
+      last = { scan: s, bench: last ? last.bench : null, prof: last ? last.prof : null, when: Date.now() };
     } finally {
       busy = false;
     }
