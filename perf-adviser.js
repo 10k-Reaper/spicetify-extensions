@@ -34,9 +34,9 @@
 //     only re-checks rules whose precondition was touched. The one timed retry is
 //     a short re-park loop that runs only while a revived rule is still live
 //
-// Kill switch: "Disable all fixes" in the panel (or "Remove applied fixes")
-// stops every injected rule. Fix state is stored in
-// localStorage["perf-adviser:state"].
+// Master switch: "Pause all fixes" in the panel stops every injected rule and
+// makes the runtime patches inactive, while remembering each fix's own on/off
+// choice. Fix state is stored in localStorage["perf-adviser:state"].
 //
 // Uninstall:
 //   spicetify config extensions perf-adviser.js-

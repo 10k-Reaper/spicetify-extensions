@@ -14,7 +14,7 @@ It does not rewrite Spotify's own JavaScript. Each fix is a separate toggle, and
 
 - **Two independent, recommended fixes**
   - removes the sticky-header backdrop blur by setting `--header-filters: none` and giving the five header surfaces a theme-coloured background;
-  - hides the Home card play button only while scrolling, which stops Spotify from repositioning its tooltip on every scroll frame.
+  - hides the Home card play button only while Home scrolls, which stops Spotify from repositioning its tooltip on every scroll frame. Lyrics, playlists and the Library are never affected.
 - **Runtime CSS patches.** In our tests, hovering a wide Home card restyled 951 elements while the idle `:has()` rules were live; parking the rules that matched nothing cut that to 378. It cannot remove Spotify's own card re-render, which is the remaining hover hitch. The engine mirrors track-peek's two global anchors with a class, parks other `:has()` rules that match nothing, and restores each one when its target appears. Rules in use are left alone.
 - **Opt-in cover pause.** A rotating `.cover-art` animation is usually added by a snippet you installed, such as Marketplace's [Rotating Cover Art](https://github.com/spicetify/marketplace/blob/main/resources/snippets.json). When the panel can identify the source it names it, because removing the source is the real fix. **Pause rotation** exists only for people who want to keep the look.
 - **Generic detection, no allow-list.** Reads every snippet, theme and extension `<style>` block, counts expensive CSS signals (`:has()`, blur, infinite animations, rule count), and turns the profiler's measured per-script cost into findings.
@@ -23,11 +23,14 @@ It does not rewrite Spotify's own JavaScript. Each fix is a separate toggle, and
 - **Opt-in slow-frame recorder.** Keeps the last 30 long-animation frames (or long tasks on older clients) with the script files that ran in them, so you can reopen the panel after a hitch and still see what it was. Off by default; while off it installs no observer.
 - **Opt-in page navigation timing.** Each route change opens a 2 s window and reports the blocking time of the long frames that start inside it plus the time to the end of the last one. It measures jank after the change, not download or first-paint time. Shares one observer with the slow-frame recorder.
 - **Selector health.** A table of the Spotify class names and CSS variables this extension depends on, each marked OK, N/A here, NOT SEEN or STALE, with the detected Spotify version. A Spotify rename shows up as STALE instead of a fix silently doing nothing.
-- **Opt-in author check.** For extension authors: records who registered a `setInterval`, a `MutationObserver` (target and options) or a hot-event listener, then runs a fixed Home scroll and reports PASS/WARN/FAIL for broad subtree observers, forced reads over 2 ms and callback/interval rates. It times callbacks during the check only; nothing is timed while idle.
+- **Opt-in author check.** For extension authors: records who registered a `setInterval`, a `MutationObserver` (target and options) or a hot-event listener, then runs a fixed Home scroll and reports PASS/WARN/FAIL for broad subtree observers, forced reads over 2 ms and callback/interval rates. It times callbacks during the check only; nothing is timed while idle. The card explains how to use it in three steps and keeps the mechanics inside an expandable note.
 - **Guided bisect (separate tab).** Halves the installed extension list and tells you which half to toggle in Marketplace, comparing every change against a noise band measured by two identical runs. It never turns an extension on or off itself; snippets and themes are not toggled.
 - **Panel scroll is kept.** A refresh, a tab switch or a measurement no longer jumps the panel back to the top; Report and Bisect keep separate offsets.
+- **Tabs switch in place.** Report and Bisect now swap inside the open panel instead of closing and reopening it, so switching views never loses your place. A **Reload Spotify** button in the panel header re-runs extensions from disk without `spicetify apply`.
+- **Measuring is a button, not a side effect.** Opening the panel only scans. Nothing scrolls and no popup closes until you press **Measure**; the panel reopens by itself when the run ends, and it also reopens with an explanation if the run could not finish because the Spotify window was hidden.
+- **Plain-language options.** Every switch has a one-sentence explanation and an expandable **What this changes technically** note, so you can decide without reading CSS.
 - **Live environment scan.** Counts of Marketplace extensions and snippets, the active theme, active backdrop-filter surfaces, the heaviest CSS sources ranked by cost signals, infinite-animation counts per source, and page zoom.
-- **One kill switch.** Turns every injected rule and every runtime patch off at once, keeping your chosen state for later.
+- **Pause all fixes.** One switch at the top of the fixes card turns off every injected rule and every runtime patch at once, keeps your individual choices, and shows a `paused` label next to each fix until you resume.
 - **No network, no file edits.** It injects reversible CSS, temporarily rewrites selectors in already-loaded stylesheets, and reads the DOM. It makes no network requests and never writes files or changes installed extensions.
 - **What it changes.** In-memory CSS, the selectors of loaded `:has()` rules (restored when their target appears), and - only when you press the button - Spotify's page zoom.
 
@@ -61,32 +64,35 @@ It does not rewrite Spotify's own JavaScript. Each fix is a separate toggle, and
 
 ## Usage
 
-1. Click the **Perf Adviser** icon in the top bar (the clock badge).
-2. Read the score card: median scroll FPS, p95 frame time, slow frames and long tasks. **Measure again** runs two longer 6 s runs; the panel closes itself for them, because an open popup costs frames.
+1. Click the **Perf Adviser** icon in the top bar (the clock badge). Opening it scans; it does not measure.
+2. Read the score card: the first time it shows `--` and **Nothing has been measured yet**. Press **Measure** for a 5 s run. **Measure again** runs two longer 6 s runs. The panel closes itself for the run because an open popup costs frames, and reopens when the run ends.
 3. **What to change** lists live evidence: an active header blur, a running animation with the snippet/theme that declares it, CSS blocks with heavy selector counts, or the measured sources from your last profile.
-4. Use the toggles under **Fixes (measured)**. Each one applies or removes its CSS immediately and is stored in `localStorage`.
-5. Open **Slow-frame recorder** (opt-in) before a hitch you want to catch, and **Page navigation timing** (opt-in) before switching pages; both add their own panel section and report lines. Leave them off when you are not debugging: while off they install no observer.
-6. **Selector health** needs no toggle. It compares this build's selectors with the current page and the Spotify version; **STALE** means Spotify renamed something.
-7. **Bisect** is a second tab. It walks you through toggling half the installed extensions in Marketplace, reloading and measuring; it never changes an extension itself.
-8. Extension authors can turn on **Author mode**, reload, then run **Author check** on a source. It needs Perf Adviser to load first in the extensions list.
-9. If you want a starting point, press **Apply recommended**.
-10. If the interface looks shrunken after backgrounding, press **Reset zoom to 100%** under **Page zoom**. This is a display fix, not an FPS fix.
-11. For a specific slow page, press **Start recording**, scroll for about ten seconds, then reopen the panel and press **Stop recording**. The profile names the extension or script that owns the cost.
+4. Use the toggles under **Fixes you can try**. Each one applies or removes its CSS immediately and is stored in `localStorage`. Every toggle has a short explanation and a **What this changes technically** note you can expand.
+5. To compare against unmodified Spotify, press **Pause all fixes** at the top of that card; **Resume all fixes** puts back exactly the switches you had chosen.
+6. Open **Slow-frame recorder** (opt-in) before a hitch you want to catch, and **Page navigation timing** (opt-in) before switching pages; both add their own panel section and report lines. Leave them off when you are not debugging: while off they install no observer.
+7. **Selector health** needs no toggle. It compares this build's selectors with the current page and the Spotify version; **STALE** means Spotify renamed something.
+8. **Bisect** is a second tab. It walks you through toggling half the installed extensions in Marketplace, reloading and measuring; it never changes an extension itself.
+9. Extension authors: open **Author mode**, read the three steps in the card, press **Reload Spotify** when the panel says a reload is pending, then press **Author check** on a source. The card explains what to do in plain language and keeps the mechanics, thresholds and wrapper costs inside **How this works technically**.
+10. If you want a starting point, press **Apply recommended**.
+11. If the interface looks shrunken after backgrounding, press **Reset zoom to 100%** under **Page zoom**. This is a display fix, not an FPS fix.
+12. For a specific slow page, press **Start recording**, scroll for about ten seconds, then reopen the panel and press **Stop recording**. The profile names the extension or script that owns the cost.
+
+If you change an extension file by hand, the header's **Reload Spotify** button re-runs extensions from disk. It cannot pick up config changes made by `spicetify apply`; for those, restart Spotify.
 
 ## Settings
 
 | Setting | Default | What it does | Risk |
 |---|---|---|---|
 | Sticky header blur | On | Sets `--header-filters: none` and gives the five sticky header surfaces the theme's surface colour as a solid background. Removes the per-frame re-blur while content scrolls behind them. | The header loses its frosted look. Themes that intentionally use a translucent header will look different, and themes that hard-code the filter ignore the variable. |
-| Home card play button | On | Adds a scroll class and hides `.main-card-PlayButtonContainer` **only while scrolling and only under `[data-testid="home-page"]`**, which stops the tooltip from being repositioned every frame. | The button disappears during a scroll and returns when you stop. Marketplace install/remove buttons use the same class and are **not** affected. |
+| Home card play button | On | Puts the scroll class on `[data-testid="home-page"]` and hides `.main-card-PlayButtonContainer` only while Home scrolls, which stops the tooltip from being repositioned every frame. Scrolling lyrics, a playlist or the Library never adds it. | The button disappears during a Home scroll and returns when you stop. Marketplace install/remove buttons use the same class and are **not** affected. |
 | Rotating cover art (opt-in) | Off | Pauses animations on `.cover-art` and the now-playing cover pseudo-elements, keeping the circular crop. When it can identify the source, the panel names the snippet/theme that declares the animation. | If a theme or snippet rotates the cover on purpose and you want to keep it, leave this off. |
 | Theme tweaks | Off | Cosmetic bundle: Marketplace installed-card border, active-button colour, 72 px player bar. Not a performance fix. | Purely visual and theme-specific. Never part of the recommended preset. |
-| Runtime CSS patches | On | Mirrors the two `track-peek` global `:has()` anchors with a class and parks other `:has()` rules that currently match nothing, restoring each one when its target appears. | Other rules that are in use are never touched. A parked rule comes back in well under a second. If a dialog looks wrong, turn this off and report the selector. |
+| Runtime CSS patches | On | Mirrors the two `track-peek` global `:has()` anchors with a class and parks other `:has()` rules that currently match nothing, restoring each one when its target appears. Rules that depend on interaction state (`:hover`, `:focus`, `:focus-visible`, `:focus-within`, `:active`, `:target`, `:visited`) are never parked, because they cannot wait for a rescan. | Other rules that are in use are never touched. A parked rule comes back in well under a second. If a menu or dialog looks wrong, pause all fixes and report the selector. |
 | Slow-frame recorder | Off | Keeps the last 30 long-animation frames (long tasks as a fallback) with their script files, blocking time and route. While off it installs no observer. | A short ring buffer in memory only. It records only during the moments you switch to it for; nothing is sent anywhere. |
 | Page navigation timing | Off | Times each route change over a 2 s window: blocking time of the long frames that start inside it plus settle time to the end of the last one. Shares the slow-frame observer. | A heuristic for jank after navigation; clean changes read near zero. It needs `Spicetify.Platform.History.listen`; the panel says if that never attached. |
-| Author mode | Off | For extension authors: records which extension registered a `setInterval`, a `MutationObserver` (target and options) or a hot-event listener, and times those callbacks during an author check. | Only sees extensions loaded after Perf Adviser, so put it first in the extensions list. While idle each wrapped callback pays one boolean check; nothing is timed until a check runs. |
+| Author mode | Off | For extension authors: records which extension registered a `setInterval`, a `MutationObserver` (target and options) or a hot-event listener, and times those callbacks during an author check. The card gives the three usage steps first; thresholds and wrapper costs are inside its expandable note. | Only sees extensions loaded after Perf Adviser, so put it first in the extensions list. While idle each wrapped callback pays one boolean check; nothing is timed until a check runs. |
 | Page zoom | 100% | Shows the current zoom. When it is not 100%, offers **Reset zoom to 100%**, which fixes the whole-UI-shrink bug after backgrounding. | Changes Spotify's page-zoom setting; this is the only Spotify setting the extension can change, and only when you press the button. |
-| Disable all fixes | - | Kill switch for every injected rule and every runtime patch. State is kept, so **Enable everything** restores your selection. | None. |
+| Pause all fixes | Off | One switch at the top of the fixes card. It removes every injected rule, makes the runtime patches inactive and stops the Home scroll class, while keeping every individual choice. **Resume all fixes** restores the same combination. | None. It only removes rules this extension added; Spotify itself is unchanged. |
 
 The panel remembers your choices in `localStorage["perf-adviser:state"]`. Selector health is a read-only table; the guided bisect stores its run in `localStorage["perf-adviser:bisect"]` so a reload does not lose it.
 
@@ -116,8 +122,9 @@ The runtime patch knows only two selectors by name - track-peek's two global `:h
 - **It cannot speed up Spotify's own JavaScript.** Tracklist re-renders, network work and Spotify's React tree are outside its reach. For large playlists, record a profile and test disabling the heavy third-party extensions it names.
 - The header fix only works when the theme applies `backdrop-filter` through `--header-filters` (Lucid does). A theme that hard-codes the filter ignores the variable.
 - CSS counts (`:has()`, blur, rule count) are **signals**, not measured fps. Only the profiler attributes real main-thread time.
-- **Runtime patches are CSS-only.** They cannot make Spotify's JavaScript faster, and they only park `:has()` rules that match nothing. The behaviour depends on how Chromium's `:has()` invalidation works today (measured on Chromium 151); if a future version removes the cost, the patch becomes unnecessary rather than harmful.
-- The tooltip fix is Home-specific by design; applying it globally would hide Marketplace install/remove buttons, which reuse the same container class.
+- **Runtime patches are CSS-only.** They cannot make Spotify's JavaScript faster, and they only park `:has()` rules that match nothing. Rules that mention a hover, focus, active, target or visited state are excluded on purpose: those states cannot wait for the next rescan, and parking them broke Library hover. The behaviour depends on how Chromium's `:has()` invalidation works today (measured on Chromium 151); if a future version removes the cost, the patch becomes unnecessary rather than harmful.
+- The tooltip fix is Home-specific by design. The scroll class goes on `[data-testid="home-page"]`, so lyrics, playlist and Library scrolling never hide the Home play button; applying it globally would also hide Marketplace install/remove buttons, which reuse the same container class.
+- **Measure needs a visible window.** A hidden or minimized Spotify window stops delivering animation frames, so there is nothing to average. The run aborts after about 1.5 s, keeps your previous result, reopens the panel and says why. Keep the window visible for a real number.
 - **The new diagnostics are heuristics.** Author check thresholds (callback ms/s, intervals/s) come from a handful of measured extensions on one machine; they flag a smell, not a proven frame cost. A broad body observer with a zero measured callback still fails the observer check, because the registration is the risk. The bisect assumes every listed extension starts enabled, needs a reload per Marketplace toggle, finds one culprit per run, and can only say **inconclusive** when the cost needs a combination of extensions. Snippets and themes are not toggled by it.
 - **Page navigation timing measures jank after a route change, not page load.** It opens a 2 s window on the route event; a quiet change reads near zero. On a client where `Spicetify.Platform.History.listen` never becomes available, the panel says the listener is not attached and records nothing.
 - **Selector health knows only the selectors this build uses.** A new Spotify rename outside that registry will not be listed; the matching fix simply does nothing.
@@ -130,11 +137,13 @@ The runtime patch knows only two selectors by name - track-peek's two global `:h
 | No Perf Adviser icon in the top bar | Is `perf-adviser.js` listed in `extensions`? Run `spicetify apply -n` and restart Spotify. Without top-bar buttons, use the **Perf Adviser** menu item. |
 | Panel opens but a fix does nothing | Check the Environment section: no blur or no rotation means there is nothing to remove on that page/theme. |
 | Header is still blurred | Another extension or the theme may re-apply `backdrop-filter` with higher specificity. Report the case with **Copy report**. |
-| FPS looks low right after opening | Home lazy-loads shelves. Let the page settle, keep the pointer off the card grid for a stable baseline, and use **Measure again**. |
+| FPS looks low right after opening | Press **Measure** for a stable run. Home lazy-loads shelves, so let the page settle and keep the pointer off the card grid. |
+| Measure does nothing or the panel stays closed | Keep the Spotify window visible. A minimized or fully covered window delivers no animation frames; the panel reopens with a message instead of a number. |
+| The Perf Adviser panel does not appear at all | Make sure only one copy is installed. A manual copy plus a Marketplace copy load two instances; keep one, then restart Spotify. |
 | Cover is frozen and you want it back | Turn off **Rotating cover art (opt-in)**. |
-| A menu or dialog looks wrong after enabling patches | Turn off **Runtime CSS patches**, then report the dialog with the **Copy report** text. |
+| A menu or dialog looks wrong after enabling patches | Press **Pause all fixes**, then report the dialog with the **Copy report** text. |
 | Not sure what to disable | Open **Installed CSS (signals)**, then record a profile on the slow page. Any source that used 250 ms or more appears under **What to change**. |
-| Something else looks wrong | Use **Disable all fixes**, then report the issue with the **Copy report** text and your Spotify/Spicetify versions. |
+| Something else looks wrong | Press **Pause all fixes**, then report the issue with the **Copy report** text and your Spotify/Spicetify versions. |
 
 Uninstall in one line:
 

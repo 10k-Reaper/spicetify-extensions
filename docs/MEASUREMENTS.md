@@ -105,6 +105,30 @@ track-peek mirror rewrites its two global anchors to classes; it was verified
 by selector inspection, not end to end, because track-peek itself was failing
 in that session (see the report).
 
+### Interaction-state rules must never be parked
+
+Parking a rule that only applies while the pointer is over something cannot
+work: the rule has to be live *before* the hover happens, and a rescan cannot
+react in time. Live testing the Library sidebar showed exactly that. Spotify
+reveals "Collapse Your Library" with
+
+```css
+.YourLibraryX:hover .L88ActoNrC2uznn2sjPF .nHeUNlsOGyG1JTdaaX2K,
+.YourLibraryX:has(:focus-visible) .L88ActoNrC2uznn2sjPF .nHeUNlsOGyG1JTdaaX2K {
+  opacity: 1;
+}
+```
+
+The selector contains `:has()`, so an earlier build could park it as "idle".
+After that the icon stayed at `opacity: 0` and the header's "Go back" control
+replayed its slide animation on each scan. The exclusion list is now `:hover`,
+`:focus`, `:focus-visible`, `:focus-within`, `:active`, `:target` and
+`:visited`, matched anywhere in the selector. `tests/park-hover.mjs` proves a
+hover rule and a focus-visible rule stay live while an idle `:has()` rule in the
+same sheet is parked (parked: 1, active: true). Live check with the fix: hovering
+the Library header ends with the icon at `opacity 1` and `transform: none`, and
+"Go back" keeps `x = 76` before, during and after the hover.
+
 **Retraction.** Earlier versions of this page reported 118-160 ms of style
 recalc for one top-bar hover, falling to 83-93 ms with the patch, a
 1,050-1,100-element restyle, and a 4 s top-bar sweep of 563-649 ms. Those
@@ -248,16 +272,51 @@ together ends **inconclusive** instead of naming `x` or `y`. The full live
 workflow (multiple toggles and reloads) was not executed; that is a limit of
 this report, not of the test.
 
-### Panel scroll
+### Panel scroll and in-place tabs
 
 A refresh, a tab switch or a measurement used to reset the panel to the top.
 The regression test scrolls Report to 500 px, switches to Bisect (which starts
-at 0), switches back (500 px restored), then presses **Measure again** and
-checks that Report is still at 500 px. Two causes were found: after
-`PopupModal.hide()` the old root is detached and reports `scrollTop 0`, and the
-new content is laid out a frame after `display()`, so assigning `scrollTop`
-immediately was clamped to 0. The offset is saved before hiding, ignored for a
-detached root, and restored immediately and again after layout.
+at 0), switches back (500 px restored), then presses **Measure** and checks that
+Report is still at 500 px. Two causes were found: after `PopupModal.hide()` the
+old root is detached and reports `scrollTop 0`, and the new content is laid out
+a frame after `display()`, so assigning `scrollTop` immediately was clamped to
+0. The offset is saved before hiding, ignored for a detached root, and restored
+immediately and again after layout.
+
+The tab switch itself no longer calls the popup at all. It swaps the content of
+the mounted `.perf-adviser-root`, so the modal node and its scroll offset stay
+put. The swap is deferred by one task because replacing the clicked tab button
+synchronously makes Spotify treat the detached target as an outside click and
+close the modal. Live counts before and after Report -> Bisect -> Report:
+`PopupModal.display` 1 -> 1, `PopupModal.hide` 0 -> 0, same root and same modal
+node.
+
+### Measure is an explicit action
+
+Opening the panel runs the scan only. The score card shows `--`, the text
+"Nothing has been measured yet" and a primary **Measure** button; live check
+confirmed one `display()` call and no `hide()` on open. Pressing Measure hides
+the modal for the run and runs one 5 s measurement. Live: the panel reopened
+after 8 s with a reading, `display()` went 1 -> 2 and `hide()` 0 -> 1.
+
+A hidden window stops animation frames, so the FPS loop would never settle and
+the panel would stay closed. A 1.5 s stall watchdog now ends the run with no
+frames, keeps the previous result, reopens the panel and reports that the window
+was hidden. `tests/measure-hidden.mjs` replaces `requestAnimationFrame` with a
+no-op and measures the abort at **2.2 s** (limit 15 s), with the panel reopened
+and the explanation shown.
+
+### Scroll class is scoped to Home
+
+The play-button class used to go on `<html>` from one document-level scroll
+listener, so scrolling lyrics in Now Playing hid the Home card play button.
+It now goes on `[data-testid="home-page"]`, and only when the event target is
+Home, inside Home, or an ancestor of Home. Live: scrolling a 748 px Now Playing
+lyrics area left `homeClass: false`, `htmlClass: false` and the play button at
+`display: block`; scrolling Home added the class and hid the button for the
+duration of the scroll (class removed 733 ms after the last event on this busy
+machine, no re-add loop); scrolling the Library added no class anywhere.
+`tests/scroll-scope.mjs` covers all four states plus pause/resume.
 
 ### Idle overhead of the new features
 
@@ -284,7 +343,10 @@ wrapped callback while idle. Nothing is timed until an author check runs.
 | `selector-health.mjs` | all four statuses and version persistence | OK / N/A here / NOT SEEN / STALE |
 | `author-check.mjs` | inventory, PASS/WARN/FAIL, startup handlers, wrapper survival | fixture 200.04 ms/s, 451 calls / 1,804.6 ms, observer+interval FAIL |
 | `bisect.mjs` | halving, noise rule, combination-only case | finds `b`; pair ends inconclusive |
-| `panel-scroll.mjs` | scroll survives tab switch and measurement | 500 px preserved |
+| `panel-scroll.mjs` | scroll survives tab switch and measurement; tabs do not redisplay | 500 px preserved; display 1 -> 2 only on Measure |
+| `scroll-scope.mjs` | Home-only scroll class, no lyrics/library leakage, pause clears it | lyrics: no class, button visible; Home: class + hidden, removed at rest |
+| `park-hover.mjs` | hover/focus rules stay live while an idle `:has()` rule is parked | parked 1, active true, both state rules intact |
+| `measure-hidden.mjs` | Measure cannot hang with no animation frames | abort 2.2 s, panel reopened, previous result kept |
 
 ## Caveats, stated plainly
 
@@ -297,6 +359,14 @@ wrapped callback while idle. Nothing is timed until an author check runs.
   CSS.
 - One machine, one theme setup. Your numbers will differ; the panel measures
   yours.
+- The live checks above ran with **exactly one** Perf Adviser script loaded.
+  When a Marketplace install and a hand-installed copy are both present, both
+  script tags run and the first one to set `window.__perfAdviser` wins; the panel
+  then does not match the file you edited. Uninstall one of them before
+  comparing builds.
+- Measure needs a visible window: a minimized or fully covered Spotify window
+  delivers no animation frames. The 1.5 s watchdog turns that into a message
+  instead of a hang, but it cannot produce a number.
 - The Part B numbers are single-session samples (three metrics windows or six
   author checks), not interleaved medians. The author thresholds and the 2 ms
   forced-read threshold are provisional and documented as such; the bisect was
