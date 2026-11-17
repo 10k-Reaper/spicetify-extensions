@@ -42,6 +42,104 @@ What the table means:
 A separate paired test with the card fix already on measured **+37.1 fps**
 (median) when the rotating cover was paused.
 
+## Offscreen animations (opt-in)
+
+Infinite CSS animations keep costing style and layout work even when their
+element is nowhere near the viewport, and keyframes that move `top`, `left` or
+`width` cannot be composited at all. The ivLyrics app mounts a lyrics section
+with six background blobs; on Home that section sits at y = 1687-2081 in a
+900 px viewport, so nothing of it is visible, yet all six animations were
+`running` and animating `top`, `left` and `transform` on a 388 x 388 element
+that also carries `backdrop-filter: blur(20px) saturate(1.8)`.
+
+Protocol: Home open, pointer parked at the top-left corner, the existing 5 s
+Home benchmark, alternating fix on/off. One full pair after the reload was
+discarded as warm-up (57.3 fps vs 91.7 fps; the first benchmark after a reload
+is always slower). Then six counted pairs:
+
+| Pair | Fix on | Fix off | Delta |
+|---|---|---|---|
+| 1 | 122.0 | 115.7 | +6.3 |
+| 2 | 119.7 | 107.2 | +12.5 |
+| 3 | 119.3 | 110.2 | +9.1 |
+| 4 | 114.8 | 115.0 | -0.2 |
+| 5 | 114.9 | 110.2 | +4.7 |
+| 6 | 114.9 | 108.5 | +6.4 |
+| **Median** | **117.1** | **110.2** | **+6.4** |
+
+p95 frame time was 14.0 ms with the fix and 14.1 ms without; five of six pairs
+were positive. An earlier exploratory probe that paused the same six blobs with
+a raw injected rule measured 108.7 -> 119.1 fps (+10.4, three pairs); the
+implemented toggle measures the smaller +6.4 figure, which is the number quoted
+in the panel and README.
+
+What it does: an `IntersectionObserver` with an 80 px margin adds one class to
+every element that currently runs an infinite CSS animation; the class sets
+`animation-play-state: paused`. Elements resume when they enter the viewport.
+The list is collected when the switch is turned on, 1.5 s and 5 s later, after
+each route change (one `History.listen` subscription) and when the panel opens.
+There is no `MutationObserver` and no polling, so an animation created later in
+the same view is only noticed at one of those moments. With the switch off no
+observer, timer or style element exists. Targets are capped at 500, and every
+class is removed on disable or when **Pause all fixes** is used.
+
+## Theme tweaks: why the purple border used to lose
+
+The optional cosmetic bundle is injected by `applyInjectedFixes()` into
+`<style id="perf-adviser-fixes">`, which runs early. Marketplace injects
+`spicetify-routes-marketplace.css` **after** it and declares
+
+```css
+.marketplace-card--installed { flex: 0 1 0%; border: 1px solid var(--spice-button); }
+```
+
+at the same specificity, so the later stylesheet won and the computed card
+border stayed `1px solid rgb(29, 185, 84)`. The root variable had the same
+problem: `colors.css` comes later and re-declares
+`:root { --spice-button-active: #1ed760 }`, so the computed value stayed
+`#1ed760`.
+
+The fix is in the injected block: `border: 2px solid #814fff !important` and
+`:root:root { --spice-button-active: #7b3bff }`. On the live client:
+
+| Check | Before | After |
+|---|---|---|
+| Installed card border | `1px solid rgb(29, 185, 84)` | `2px solid rgb(129, 79, 255)` |
+| `--spice-button-active` | `#1ed760` | `#7b3bff` |
+| Player bar height | 72 px | 72 px |
+
+`tests/theme-tweaks.mjs` reproduces the ordering: after the toggle is on it
+appends a Marketplace-style rule and a `colors.css`-style rule **later** in the
+document and asserts the purple border, the `#7b3bff` variable and the 72 px bar
+still win. Switching the toggle off restores the later stylesheet's values.
+
+## Bisect: opening Marketplace -> Installed
+
+A round is only useful if the user can find the cards it names. The candidate
+list now comes from the Marketplace installed-extension list when it is
+available (the card titles, e.g. `Volume Percentage`, `adblockify`), and falls
+back to `Spicetify.Config.extensions` stems when Marketplace data is missing.
+Names are matched case- and punctuation-insensitively, so either form finds the
+card.
+
+**Open Marketplace -> Installed** hides the panel, pushes `/marketplace`,
+clicks the Installed tab if it is not already active, and marks the cards for
+the round with a 3 px outline and a badge (`Remove for this round`, or
+`Turn back ON for this round` for an enable round). A fixed banner repeats the
+instruction, names anything it could not find, and has a **Dismiss** button.
+The extension never clicks Remove and never writes Marketplace storage; the
+toggles stay the user's job. Marks, badges and the banner are removed on
+dismiss, when the round is measured, when the bisect is reset, and on the next
+route change away from `/marketplace`.
+
+Live check (Spotify 1.3.8.620, 21 installed cards): the push landed on
+`/marketplace` with the Installed tab active, the two requested cards were
+outlined and badged, a third name was reported as not found, Dismiss cleared
+everything, and a synthetic route change to `/` cleared a fresh set. The panel
+also showed the new button for a pending disable round. `tests/bisect-open.mjs`
+covers the route push, the tab click, matching, the missing-name report, banner
+wording, the enable direction, dismiss and route cleanup.
+
 ## Hover cost and idle `:has()` rules
 
 Hover numbers are easy to misattribute. If the pointer enters a control from a
@@ -166,6 +264,13 @@ With **Runtime CSS patches** on, it adds two `MutationObserver`s (body and head)
 loads and stylesheets arrive. Those scans settle: in a measured session the
 engine ran 11-12 scans in the first ~10 seconds and none afterwards, and parked
 rules are only re-checked when a mutation or navigation could affect them.
+
+With **Offscreen animations** on, it adds one `IntersectionObserver` plus three
+one-shot collection timers on enable (immediate, 1.5 s, 5 s) and one collection
+per route change. The observer callback only runs when an element crosses the
+viewport edge. With the switch off there is no observer, timer or style element.
+This cost was not part of the idle A/B windows above, which ran with every fix
+off.
 
 ## New diagnostics (Part B)
 
@@ -347,6 +452,9 @@ wrapped callback while idle. Nothing is timed until an author check runs.
 | `scroll-scope.mjs` | Home-only scroll class, no lyrics/library leakage, pause clears it | lyrics: no class, button visible; Home: class + hidden, removed at rest |
 | `park-hover.mjs` | hover/focus rules stay live while an idle `:has()` rule is parked | parked 1, active true, both state rules intact |
 | `measure-hidden.mjs` | Measure cannot hang with no animation frames | abort 2.2 s, panel reopened, previous result kept |
+| `theme-tweaks.mjs` | cosmetic tweaks beat later, equal-specificity Marketplace/theme CSS | border `2px solid rgb(129, 79, 255)`, variable `#7b3bff`, bar 72 px |
+| `bisect-open.mjs` | round opens Marketplace -> Installed, marks only its cards, cleans up | 3 of 4 cards marked, 1 reported missing, marks cleared on dismiss and route change |
+| `offscreen-anims.mjs` | only endless animations outside the viewport are paused and resumed | 1 paused / 1 running, late mount caught, 0 styles left when off |
 
 ## Caveats, stated plainly
 
