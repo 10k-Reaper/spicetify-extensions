@@ -9,8 +9,14 @@
 //     normally added by a snippet/theme the user installed, so the panel first
 //     names that source and suggests disabling it; pausing it here is only a
 //     fallback for people who want to keep the effect.
+//   - one opt-in override for endless animations whose element is offscreen:
+//     they are paused through an IntersectionObserver and resume as soon as
+//     they scroll into view. Measured +6.4 fps on Home here; visible motion is
+//     never paused.
 //   - one optional cosmetic bundle (marketplace card border, active-button
 //     colour, 72 px player bar) - not a performance fix, off by default
+//   - a guided bisect that can open Marketplace -> Installed and outline the
+//     cards for the current round. It never toggles anything itself.
 //   - runtime CSS patches: Chromium treats every live :has() rule as a
 //     document-wide invalidation source, so a hover can restyle more of the
 //     page than the control under the cursor. The patch engine mirrors the two
@@ -32,7 +38,9 @@
 //   - it does not touch Spotify's own files
 //   - it does not poll on a timer; the patch engine wakes on DOM mutations and
 //     only re-checks rules whose precondition was touched. The one timed retry is
-//     a short re-park loop that runs only while a revived rule is still live
+//     a short re-park loop that runs only while a revived rule is still live.
+//     The offscreen-animation switch, only while it is on, refreshes its element
+//     list on route changes, when the panel opens and on three one-shot delays.
 //
 // Master switch: "Pause all fixes" in the panel stops every injected rule and
 // makes the runtime patches inactive, while remembering each fix's own on/off
@@ -128,12 +136,16 @@
   // recommended preset.
   const THEME_CSS = [
     "/* Perf Adviser optional theme tweaks (cosmetic, not a performance fix). */",
+    // Marketplace's own route stylesheet is injected after this one and also
+    // targets .marketplace-card--installed, so the border needs !important to
+    // win over its 1px green border. Same for the root variable: colors.css is
+    // later in the document, so :root:root raises specificity above it.
     ".marketplace-card--installed {",
     "  flex: 0 !important;",
     "  -webkit-box-flex: 0 !important;",
-    "  border: 2px solid #814fff;",
+    "  border: 2px solid #814fff !important;",
     "}",
-    ":root { --spice-button-active: #7b3bff; }",
+    ":root:root { --spice-button-active: #7b3bff; }",
     ".main-nowPlayingBar-nowPlayingBar:not(#a):not(#b) { height: 72px !important; }",
   ].join("\n");
 
@@ -148,6 +160,7 @@
     cardPlayFix: true,
     coverPause: false,
     themeTweaks: false,
+    offscreen: false,
     runtimePatch: true,
     cssOff: false,
     lagRecorder: false,
@@ -358,6 +371,101 @@
     clearScrollClass();
   }
   applyInjectedFixes();
+
+  // ------------------------------------------------- offscreen animations
+  // Optional. An infinite CSS animation keeps costing style/layout work even
+  // when its element is far outside the viewport, and keyframes that move
+  // top/left/width cannot be composited at all. The ivLyrics background blobs
+  // sit 1700 px below Home and still measured ~10 fps of scroll headroom. This
+  // pauses just the animation while the element is offscreen; the element and
+  // its look are untouched, and it resumes as soon as it scrolls into view.
+  const OFFSCREEN_ID = "perf-adviser-offscreen";
+  const OFFSCREEN_CLASS = "perf-adviser-offscreen-anim";
+  const OFFSCREEN_CSS = [
+    "/* Perf Adviser fix 4: pause endless animations while offscreen. */",
+    "." + OFFSCREEN_CLASS + " { animation-play-state: paused !important; }",
+  ].join("\n");
+  const offscreen = { io: null, style: null, targets: new Set(), timer: null, late: null };
+  let offscreenNavHooked = false;
+
+  function offscreenCollect() {
+    if (!state.offscreen || state.cssOff || !offscreen.io) return;
+    let anims = [];
+    try { anims = document.getAnimations ? document.getAnimations() : []; } catch (e) { anims = []; }
+    for (const a of anims) {
+      let timing = null;
+      try { timing = a.effect && a.effect.getTiming(); } catch (e) { timing = null; }
+      if (!timing || timing.iterations !== Infinity) continue;
+      const t = a.effect.target;
+      if (!t || !t.isConnected || offscreen.targets.has(t)) continue;
+      if (offscreen.targets.size >= 500) break; // a runaway page must not grow this forever
+      offscreen.targets.add(t);
+      try { offscreen.io.observe(t); } catch (e) { offscreen.targets.delete(t); }
+    }
+  }
+
+  function offscreenScheduleCollect(ms) {
+    if (!state.offscreen || state.cssOff) return;
+    offscreenHookNav();
+    if (offscreen.timer) clearTimeout(offscreen.timer);
+    offscreen.timer = setTimeout(() => {
+      offscreen.timer = null;
+      offscreenCollect();
+    }, ms);
+  }
+
+  // One route subscription, kept across off/on cycles; it does nothing while
+  // the fix is off. New views bring new animations, so re-collect after each
+  // navigation instead of watching the DOM.
+  function offscreenHookNav() {
+    if (offscreenNavHooked) return;
+    offscreenNavHooked = true;
+    try {
+      const H = Spicetify.Platform && Spicetify.Platform.History;
+      if (H && H.listen) H.listen(() => offscreenScheduleCollect(900));
+    } catch (e) { /* ignore */ }
+  }
+
+  function offscreenEnable() {
+    if (!(state.offscreen && !state.cssOff)) return;
+    if (!offscreen.io) {
+      if (typeof IntersectionObserver !== "function") return;
+      offscreen.style = document.createElement("style");
+      offscreen.style.id = OFFSCREEN_ID;
+      offscreen.style.textContent = OFFSCREEN_CSS;
+      (document.head || document.documentElement).appendChild(offscreen.style);
+      offscreen.io = new IntersectionObserver((entries) => {
+        for (const e of entries) {
+          if (e.isIntersecting) e.target.classList.remove(OFFSCREEN_CLASS);
+          else e.target.classList.add(OFFSCREEN_CLASS);
+        }
+      }, { rootMargin: "80px" });
+    }
+    offscreenCollect();
+    offscreenScheduleCollect(1500); // late-mounting widgets on this view
+    // A second one-shot covers apps that mount after the first pass (e.g. a
+    // saved-on reload where the lyrics panel appears a few seconds late).
+    if (offscreen.late) clearTimeout(offscreen.late);
+    offscreen.late = setTimeout(() => { offscreen.late = null; offscreenCollect(); }, 5000);
+  }
+
+  function offscreenDisable() {
+    if (offscreen.timer) { clearTimeout(offscreen.timer); offscreen.timer = null; }
+    if (offscreen.late) { clearTimeout(offscreen.late); offscreen.late = null; }
+    if (offscreen.io) { try { offscreen.io.disconnect(); } catch (e) { /* ignore */ } offscreen.io = null; }
+    for (const el of offscreen.targets) {
+      try { el.classList.remove(OFFSCREEN_CLASS); } catch (e) { /* ignore */ }
+    }
+    offscreen.targets.clear();
+    if (offscreen.style) { offscreen.style.remove(); offscreen.style = null; }
+  }
+
+  function syncOffscreen() {
+    if (state.offscreen && !state.cssOff) offscreenEnable();
+    else offscreenDisable();
+  }
+  // Restore a saved choice on reload. Nothing runs when the switch is off.
+  syncOffscreen();
 
   // ------------------------------------------------------- panel surface
   // Spotify's PopupModal surface is translucent (rgba(...,.7) + a 32 px blur in
@@ -1932,6 +2040,9 @@
       cardPlayFix: !!state.cardPlayFix,
       coverPause: !!state.coverPause,
       themeTweaks: !!state.themeTweaks,
+      offscreen: !!state.offscreen,
+      offscreenPaused: document.querySelectorAll("." + OFFSCREEN_CLASS).length,
+      offscreenWatched: offscreen.targets.size,
       coverRotating: !!coverName,
       coverName,
       coverSource: coverName ? animationSource(coverName, css) : null,
@@ -2095,10 +2206,10 @@
     }
     card.appendChild(top);
     card.appendChild(h("div", `font-size:12px;color:${C.sub};line-height:1.45;`,
-      "When scrolling is slow and you have several extensions, this narrows down which one is responsible. It never turns anything on or off: it tells you which half to toggle in Marketplace -> Installed, then you reload and measure again. " +
+      "When scrolling is slow and you have several extensions, this narrows down which one is responsible. It never turns anything on or off: it tells you which half to toggle in Marketplace -> Installed, and can open that page and outline those cards for you. You still do the toggling, you reload, and you measure again. " +
       "Each change is compared with a noise band measured by two identical runs, so a difference smaller than normal run-to-run variation is never called a result."));
     card.appendChild(note("How a round works technically",
-      "The candidate list comes from Spicetify.Config.extensions or Marketplace, minus Perf Adviser. Baseline and calibration runs establish the spread between two identical measurements; every later round must beat that band. A round toggles half the remaining candidates, measures, and keeps the half that reproduced the change. One culprit per run; 'Find another' starts over with it excluded. " +
+      "The candidate list is the Marketplace installed-extension list (the same names as the cards), falling back to Spicetify.Config.extensions minus Perf Adviser. Baseline and calibration runs establish the spread between two identical measurements; every later round must beat that band. A round toggles half the remaining candidates, measures, and keeps the half that reproduced the change. One culprit per run; 'Find another' starts over with it excluded. " +
       "Marketplace toggles only take effect after a reload, so each round needs one. Snippets and themes are not toggled by this workflow."));
 
     if (!bisect) {
@@ -2125,6 +2236,10 @@
       } else if (bisect.awaiting && bisect.pending) {
         card.appendChild(h("div", `font-size:12px;color:${C.text};background:rgba(76,179,212,.10);border:1px solid rgba(76,179,212,.35);border-radius:10px;padding:9px 12px;line-height:1.45;white-space:pre-wrap;`,
           bisectInstruction()));
+        if (!marketplaceInstalled()) {
+          card.appendChild(h("div", `font-size:12px;color:${C.amber};line-height:1.45;`,
+            "Marketplace is not installed, so there is no Installed page to open. Turn these extensions on or off wherever they are installed, reload, then measure this round."));
+        }
       } else if (bisect.phase === "calibrate") {
         card.appendChild(h("div", `font-size:12px;color:${C.text};background:rgba(76,179,212,.10);border:1px solid rgba(76,179,212,.35);border-radius:10px;padding:9px 12px;line-height:1.45;`,
           "Calibration: reload Spotify without changing any extension, reopen this panel and measure again. Two readings of the same setup give the noise floor that every later round is tested against."));
@@ -2140,6 +2255,9 @@
       }
       if (bisect.phase === "calibrate" || (bisect.awaiting && bisect.pending)) {
         btns.appendChild(btn("Reload Spotify", reloadSpotify));
+      }
+      if (bisect.pending && marketplaceInstalled()) {
+        btns.appendChild(btn("Open Marketplace -> Installed", () => { openBisectTargets(bisect.pending.toggled); }));
       }
       if (bisect.pending) btns.appendChild(btn("Copy instruction", () => copyText(bisectInstruction())));
       btns.appendChild(btn("Copy report", () => copyText(bisectReportText())));
@@ -2206,35 +2324,202 @@
       else localStorage.removeItem(BISECT_KEY);
     } catch (e) { /* ignore */ }
   }
-  function resetBisect() { bisect = null; saveBisect(); }
+  function resetBisect() { bisect = null; saveBisect(); clearBisectMarks(); }
 
-  // Names the user can find in Marketplace -> Installed. Falls back to the
-  // loaded file names when Marketplace data is unavailable.
+  // Names the user can find in Marketplace -> Installed. Marketplace knows the
+  // card titles ("Volume Percentage", "adblockify"), while Spicetify.Config
+  // only has file names (volumePercentageWrapper.js, adblock.js). The
+  // Marketplace list therefore wins whenever it is available; the config stems
+  // are the fallback for setups without Marketplace data.
+  function nameKey(n) {
+    return String(n == null ? "" : n)
+      .toLowerCase()
+      .replace(/\.[a-z0-9]+$/, "")
+      .replace(/[^a-z0-9]+/g, "");
+  }
+
   function extensionNames(s) {
-    const out = new Set();
-    try {
-      const list = Spicetify.Config && Spicetify.Config.extensions;
-      if (Array.isArray(list) && list.length) {
-        for (const f of list) {
-          const n = String(f).replace(/\.js$/i, "");
-          if (n && !/^perf-adviser$/i.test(n)) out.add(n);
-        }
-      }
-    } catch (e) { /* ignore */ }
-    if (!out.size && s && s.market && s.market.extensions) {
-      for (const e of s.market.extensions) {
-        if (e && e.name && !/perf adviser/i.test(e.name)) out.add(e.name);
-      }
+    const out = [];
+    const seen = new Set();
+    const add = (name) => {
+      const n = String(name == null ? "" : name).trim();
+      if (!n) return;
+      const k = nameKey(n);
+      if (!k || k === "perfadviser" || seen.has(k)) return;
+      seen.add(k);
+      out.push(n);
+    };
+    const market = s && s.market && s.market.extensions;
+    if (Array.isArray(market) && market.length) {
+      for (const e of market) if (e) add(e.name);
+    } else {
+      try {
+        const list = Spicetify.Config && Spicetify.Config.extensions;
+        if (Array.isArray(list)) for (const f of list) add(String(f).replace(/\.(js|mjs)$/i, ""));
+      } catch (e) { /* ignore */ }
     }
-    return [...out].sort((a, b) => a.localeCompare(b));
+    return out.sort((a, b) => a.localeCompare(b));
+  }
+
+  // -------------------------------------------------- bisect -> Marketplace
+  // Applying a round is the user's job, so this only navigates to
+  // Marketplace -> Installed and marks the cards named in the round. It never
+  // presses Remove, never writes Marketplace storage and never unloads an
+  // extension. Marks and banner disappear on the next route change, when the
+  // round is measured, or when the bisect is reset.
+  const MARK_ID = "perf-adviser-bisect-marks";
+  const BANNER_ID = "perf-adviser-bisect-banner";
+  const MARK_CLASS = "perf-adviser-bisect-hit";
+  const BADGE_CLASS = "perf-adviser-bisect-badge";
+  const MARK_CSS = [
+    "/* Perf Adviser bisect: marks the cards named in the current round. */",
+    "." + MARK_CLASS + " { outline: 3px solid #4cb3d4 !important; outline-offset: -3px !important; }",
+    "." + BADGE_CLASS + " { display:inline-block;margin-top:6px;padding:2px 8px;border-radius:999px;background:#4cb3d4;color:#04222b;font-size:10px;font-weight:700;line-height:1.5; }",
+    "#" + BANNER_ID + " { position:fixed;left:50%;bottom:104px;transform:translateX(-50%);z-index:2147483000;display:flex;align-items:center;gap:10px;max-width:min(620px,92vw);padding:10px 12px;border-radius:12px;background:#062730;color:var(--spice-text,#fff);border:1px solid #4cb3d4;box-shadow:0 8px 24px rgba(0,0,0,.45);font-size:12px;line-height:1.4; }",
+    "#" + BANNER_ID + " button { flex:none;padding:4px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.35);background:transparent;color:inherit;font-size:11px;cursor:pointer; }",
+  ].join("\n");
+  let bisectNavHooked = false;
+  let bisectMarks = { names: [], highlighted: [], missing: [], at: null };
+
+  function marketplaceInstalled() {
+    try {
+      const apps = Spicetify.Config && Spicetify.Config.custom_apps;
+      if (Array.isArray(apps) && apps.some((a) => /marketplace/i.test(String(a)))) return true;
+    } catch (e) { /* ignore */ }
+    if (lastMarket) return true;
+    return !!document.querySelector(".marketplace-tabBar-headerItemLink");
+  }
+
+  function ensureMarkStyle() {
+    let el = document.getElementById(MARK_ID);
+    if (!el) {
+      el = document.createElement("style");
+      el.id = MARK_ID;
+      el.textContent = MARK_CSS;
+      (document.head || document.documentElement).appendChild(el);
+    }
+    return el;
+  }
+
+  function clearBisectMarks() {
+    for (const el of document.querySelectorAll("." + MARK_CLASS)) el.classList.remove(MARK_CLASS);
+    for (const el of document.querySelectorAll("." + BADGE_CLASS)) el.remove();
+    const banner = document.getElementById(BANNER_ID);
+    if (banner) banner.remove();
+    bisectMarks = { names: [], highlighted: [], missing: [], at: null };
+  }
+
+  // One subscription, installed the first time a round is opened, so the marks
+  // do not survive a navigation away from Marketplace. No polling.
+  function ensureBisectNavCleanup() {
+    if (bisectNavHooked) return;
+    bisectNavHooked = true;
+    try {
+      const H = Spicetify.Platform && Spicetify.Platform.History;
+      if (H && H.listen) H.listen(() => {
+        if (!/^\/marketplace(\/|$)/.test(route())) clearBisectMarks();
+      });
+    } catch (e) { /* ignore */ }
+  }
+
+  function cardTitle(card) {
+    const el = card.querySelector(".main-cardHeader-text");
+    if (el && el.textContent) return el.textContent.trim();
+    const a = card.querySelector("a[title]");
+    return a ? String(a.getAttribute("title") || "").trim() : "";
+  }
+  function cardMatches(card, key) {
+    const k = nameKey(cardTitle(card));
+    if (!k || !key) return false;
+    return k === key || (key.length >= 4 && k.length >= 4 && (k.indexOf(key) >= 0 || key.indexOf(k) >= 0));
+  }
+
+  async function openBisectTargets(namesArg) {
+    const names = (Array.isArray(namesArg) && namesArg.length
+      ? namesArg
+      : bisect && bisect.pending ? bisect.pending.toggled : []).map(String);
+    const action = bisect && bisect.pending ? bisect.pending.action : "disable";
+    const empty = { ok: false, highlighted: [], missing: names };
+    clearBisectMarks();
+    if (!names.length) return Object.assign({}, empty, { reason: "no-candidates" });
+    if (!marketplaceInstalled()) return Object.assign({}, empty, { reason: "no-marketplace" });
+    ensureBisectNavCleanup();
+    try { Spicetify.PopupModal.hide(); } catch (e) { /* ignore */ }
+    try { Spicetify.Platform.History.push("/marketplace"); } catch (e) {
+      return Object.assign({}, empty, { reason: "no-history" });
+    }
+    try {
+      const deadline = Date.now() + 9000;
+      let tabs = [];
+      while (Date.now() < deadline) {
+        tabs = [...document.querySelectorAll(".marketplace-tabBar-headerItemLink")];
+        if (tabs.length) break;
+        await sleep(120);
+      }
+      if (!tabs.length) return Object.assign({}, empty, { reason: "no-tabbar" });
+      const tab = tabs.find((el) => /^installed$/i.test((el.textContent || "").trim()));
+      if (tab && !/\bmarketplace-tabBar-active\b/.test(String(tab.className))) tab.click();
+      let cards = [];
+      while (Date.now() < deadline) {
+        cards = [...document.querySelectorAll(".marketplace-card--installed")];
+        if (cards.some((c) => cardTitle(c))) break;
+        await sleep(120);
+      }
+      if (!cards.length) return Object.assign({}, empty, { reason: "no-cards" });
+      await sleep(250); // let the tab switch repaint before touching the DOM
+      cards = [...document.querySelectorAll(".marketplace-card--installed")];
+      ensureMarkStyle();
+      const highlighted = [];
+      const missing = [];
+      for (const name of names) {
+        const key = nameKey(name);
+        const card = cards.find((c) => cardMatches(c, key));
+        if (!card) { missing.push(name); continue; }
+        card.classList.add(MARK_CLASS);
+        if (!card.querySelector("." + BADGE_CLASS)) {
+          const badge = h("div", "", action === "enable" ? "Turn back ON for this round" : "Remove for this round");
+          badge.className = BADGE_CLASS;
+          (card.querySelector(".main-card-cardMetadata") || card).appendChild(badge);
+        }
+        highlighted.push(cardTitle(card) || name);
+      }
+      bisectMarks = { names, highlighted, missing, at: new Date().toISOString() };
+
+      const banner = h("div", "");
+      banner.id = BANNER_ID;
+      banner.setAttribute("role", "status");
+      banner.dataset.names = names.join("|");
+      banner.dataset.action = action;
+      banner.appendChild(h("div", "flex:1 1 auto;",
+        (action === "enable" ? "Turn these extensions back ON" : "Turn these extensions OFF") +
+        " in Marketplace -> Installed: the " + highlighted.length + " outlined card(s) are this round's set. " +
+        (missing.length ? missing.length + " not found on this page: " + missing.join(", ") + ". " : "") +
+        "Reload Spotify afterwards, then measure again. Perf Adviser changes nothing itself."));
+      const close = h("button", "", "Dismiss");
+      close.addEventListener("click", clearBisectMarks);
+      banner.appendChild(close);
+      (document.body || document.documentElement).appendChild(banner);
+
+      return {
+        ok: !!highlighted.length,
+        reason: highlighted.length ? "marked" : "no-match",
+        highlighted,
+        missing,
+        action,
+        route: route(),
+      };
+    } catch (e) {
+      return Object.assign({}, empty, { reason: "error", error: String((e && e.message) || e) });
+    }
   }
 
   function bisectInstruction() {
     if (!bisect || !bisect.pending) return "";
     const p = bisect.pending;
-    return "Turn " + (p.action === "disable" ? "OFF" : "ON") + " these " + p.toggled.length +
+    return "Turn " + (p.action === "disable" ? "OFF" : "back ON") + " these " + p.toggled.length +
       " extension(s) in Marketplace -> Installed: " + p.toggled.join(", ") +
-      ". Then reload Spotify (or restart it), open Perf Adviser -> Bisect and click Measure this round. Leave every other extension as it is.";
+      ". The Open Marketplace -> Installed button in this panel jumps to that page and outlines the cards for this round, so the outlined ones are the only ones to change. " +
+      "Then reload Spotify (or restart it), open Perf Adviser -> Bisect and click Measure this round. Leave every other extension as it is.";
   }
 
   function pushBisectRound(pend, afterFps, delta, noise, outcome) {
@@ -2355,6 +2640,7 @@
     if (lag.nav.normRoute(route()) !== "/") { notify("Perf Adviser: open Home before a bisect measurement", true); return; }
     bisectBusy = true;
     busy = true;
+    clearBisectMarks();
     savePanelScroll(); try { Spicetify.PopupModal.hide(); } catch (e) { /* ignore */ }
     notify("Perf Adviser: bisect measurement - " + BISECT.runs + " x " + (BISECT.runMs / 1000) + " s, the page will scroll");
     await sleep(600);
@@ -2378,6 +2664,7 @@
       notify("Perf Adviser: need at least two other extensions to bisect", true);
       return;
     }
+    clearBisectMarks();
     bisect = {
       startedAt: new Date().toISOString(),
       phase: "baseline",
@@ -2739,6 +3026,7 @@
     lines.push("Fixes: header blur " + (s.headerFix ? "removed" : "left alone") +
       ", Home card play button " + (s.cardPlayFix ? "hidden while scrolling" : "always shown") +
       ", rotating cover " + (s.coverPause ? "paused" : "left alone") +
+      ", offscreen animations " + (s.offscreen ? "paused (" + s.offscreenPaused + " now)" : "left alone") +
       ", theme tweaks " + (s.themeTweaks ? "on" : "off") +
       "; rotating animation present: " + (s.coverRotating ? "yes" : "no"));
     if (p) {
@@ -2809,6 +3097,7 @@
     const p = last.prof || null;
     const { recs } = buildRecommendations(s, p);
     savePanelScroll();
+    offscreenScheduleCollect(0);
 
     const root = h("div", "display:flex;flex-direction:column;gap:16px;min-width:min(620px,78vw);max-height:70vh;overflow:auto;padding:4px 2px 8px;");
     root.className = "perf-adviser-root";
@@ -2962,6 +3251,7 @@
         saveState(state);
         applyInjectedFixes();
         syncRuntimePatches();
+        syncOffscreen();
         notify("Perf Adviser: all fixes resumed");
         refresh();
       }, true));
@@ -2971,6 +3261,7 @@
         saveState(state);
         applyInjectedFixes();
         syncRuntimePatches();
+        syncOffscreen();
         notify("Perf Adviser: all fixes paused");
         refresh();
       }));
@@ -2983,6 +3274,7 @@
       saveState(state);
       applyInjectedFixes();
       syncRuntimePatches();
+      syncOffscreen();
       notify(message);
       refresh();
     };
@@ -3029,6 +3321,7 @@
         saveState(state);
         applyInjectedFixes();
         syncRuntimePatches();
+        syncOffscreen();
         notify("Perf Adviser: recommended fixes applied");
         refresh();
       }, true));
@@ -3079,7 +3372,23 @@
       onClick: () => setFix("coverPause", !s.coverPause, s.coverPause ? "Perf Adviser: cover rotation resumed" : "Perf Adviser: cover rotation paused"),
     }));
 
-    // 4. optional cosmetic bundle
+    // 4. endless animations that are offscreen (opt-in)
+    const animCount = (s.animations || []).length;
+    fixCard.appendChild(addToggle({
+      title: "Offscreen animations (opt-in)",
+      on: !!s.offscreen,
+      detail: s.offscreen
+        ? "Endless animations are paused only while their element is outside the viewport and resume on the way in. " +
+          (s.offscreenPaused ? s.offscreenPaused + " element(s) are paused right now." : "Nothing was offscreen at the last scan.")
+        : (animCount
+          ? animCount + " endless animation(s) are running here. Pausing the ones outside the viewport measured +6 fps on Home on this machine."
+          : "No endless animation was found here, so this switch would do nothing until one appears."),
+      technical: "An IntersectionObserver (80 px margin) adds one class to elements that run an infinite CSS animation; the class sets animation-play-state:paused. Elements resume as soon as they enter the viewport. The list is collected when you turn this on, 1.5 s and 5 s later, after each route change and when this panel opens - there is no MutationObserver and no polling, so an animation created later in the same view is only noticed at one of those moments. With the switch off no observer, no timer and no style exist. Measured +6.4 fps median (6 paired 5 s runs, Home scroll, pointer parked) while six ivLyrics background blobs animated top/left/transform 1700 px below the viewport.",
+      action: s.offscreen ? "Resume everywhere" : "Pause while offscreen",
+      onClick: () => setFix("offscreen", !s.offscreen, s.offscreen ? "Perf Adviser: offscreen animations resumed" : "Perf Adviser: offscreen animations paused"),
+    }));
+
+    // 5. optional cosmetic bundle
     fixCard.appendChild(addToggle({
       title: "Theme tweaks",
       on: !!s.themeTweaks,
@@ -3482,8 +3791,8 @@
       "The FPS test scrolls the largest scrollable element for a fixed time and reports median frame rate, p95 frame time, slow frames (>33 ms) and long tasks. " +
       "It runs with this panel closed, does one unmeasured warm-up scroll first, and acknowledges that Home FPS depends on where the mouse rests. " +
       "The profiler wraps timers, animation frames, event listeners and MutationObservers only while recording, then restores them. " +
-      "When idle the extension runs no timers, observers or animation frames - just three passive scroll listeners. " +
-      "The CSS/animation inventory is read only when the panel is built, never on a timer. " +
+      "When idle the extension runs no repeating timers, observers or animation frames - just three passive scroll listeners. Offscreen animations, while you have that switch on, keeps one IntersectionObserver and a few one-shot collection timers. " +
+      "The CSS/animation inventory is read when the panel is built, never on a repeating timer. " +
       "Uninstall: run \"spicetify config extensions perf-adviser.js-\" then \"spicetify apply -n\" (or delete perf-adviser.js from %APPDATA%\\spicetify\\Extensions and remove it from config-xpui.ini)."
     ));
     body.appendChild(foot);
@@ -3651,6 +3960,16 @@
         findAnother: () => findAnotherBisect(last ? last.scan : null),
         report: bisectReportText,
         instruction: bisectInstruction,
+        marketplaceInstalled,
+        openTargets: (names) => openBisectTargets(names),
+        get marks() {
+          return {
+            names: bisectMarks.names.slice(),
+            highlighted: bisectMarks.highlighted.slice(),
+            missing: bisectMarks.missing.slice(),
+            at: bisectMarks.at,
+          };
+        },
         // Scripted control: same decision path with supplied FPS instead of a
         // live scroll. Intended for tests and for replaying saved numbers.
         begin(names) {
@@ -3678,6 +3997,7 @@
         saveState(state);
         applyInjectedFixes();
         syncRuntimePatches();
+        syncOffscreen();
         lag.sync();
         return Object.assign({}, state);
       },
@@ -3694,16 +4014,24 @@
           .slice(0, 10),
         preconditions: runtime.precond,
       }),
+      offscreenInfo: () => ({
+        on: !!state.offscreen && !state.cssOff,
+        watched: offscreen.targets.size,
+        paused: document.querySelectorAll("." + OFFSCREEN_CLASS).length,
+        observer: !!offscreen.io,
+      }),
       removeFixes() {
         state.headerFix = false;
         state.cardPlayFix = false;
         state.coverPause = false;
         state.themeTweaks = false;
+        state.offscreen = false;
         state.runtimePatch = false;
         state.cssOff = true;
         saveState(state);
         applyInjectedFixes();
         syncRuntimePatches();
+        syncOffscreen();
       },
     };
   })();
