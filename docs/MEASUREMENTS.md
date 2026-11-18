@@ -400,9 +400,9 @@ this report, not of the test.
 ### Panel scroll and in-place tabs
 
 A refresh, a tab switch or a measurement used to reset the panel to the top.
-The regression test scrolls Report to 500 px, parks Other at its own offset,
+The regression test scrolls Report to 500 px, parks Advanced at its own offset,
 switches to Bisect (which starts at 0), switches back (500 px restored), checks
-the Other offset, then presses **Measure** and checks that Report is still at
+the Advanced offset, then presses **Measure** and checks that Report is still at
 500 px. Two causes were found: after `PopupModal.hide()` the old root is
 detached and reports `scrollTop 0`, and the new content is laid out a frame
 after `display()`, so assigning `scrollTop` immediately was clamped to 0. The
@@ -413,7 +413,7 @@ The tab switch itself no longer calls the popup at all. It swaps the content of
 the mounted `.perf-adviser-root`, so the modal node and its scroll offset stay
 put. The swap is deferred by one task because replacing the clicked tab button
 synchronously makes Spotify treat the detached target as an outside click and
-close the modal. Live counts before and after Report -> Other -> Bisect ->
+close the modal. Live counts before and after Report -> Advanced -> Bisect ->
 Report: `PopupModal.display` 1 -> 1, `PopupModal.hide` 0 -> 0, same root and
 same modal node.
 
@@ -469,7 +469,7 @@ wrapped callback while idle. Nothing is timed until an author check runs.
 | `selector-health.mjs` | all four statuses, both top-bar names, version persistence | OK / N/A here / NOT SEEN / STALE |
 | `author-check.mjs` | inventory, PASS/WARN/FAIL, startup handlers, wrapper survival | fixture 200.04 ms/s, 451 calls / 1,804.6 ms, observer+interval FAIL |
 | `bisect.mjs` | halving, noise rule, combination-only case | finds `b`; pair ends inconclusive |
-| `panel-scroll.mjs` | scroll survives per-tab switches and measurement; tabs do not redisplay | 500 px Report and Other offsets preserved; display 1 -> 2 only on Measure |
+| `panel-scroll.mjs` | scroll survives per-tab switches and measurement; tabs do not redisplay | 500 px Report and Advanced offsets preserved; display 1 -> 2 only on Measure |
 | `scroll-scope.mjs` | Home-only scroll class, no lyrics/library leakage, pause clears it | lyrics: no class, button visible; Home: class + hidden, removed at rest |
 | `park-hover.mjs` | hover/focus rules stay live while an idle `:has()` rule is parked | parked 1, active true, both state rules intact |
 | `measure-hidden.mjs` | Measure cannot hang with no animation frames | abort 2.2 s, panel reopened, previous result kept |
