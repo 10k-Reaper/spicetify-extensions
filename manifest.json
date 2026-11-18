@@ -1,14 +1,18 @@
 [
   {
-    "name": "Liquid Lyrics",
-    "description": "A modern lyrics extension designed for Glowify & Liquify with adaptive styling for other Spicetify themes",
+    "name": "Liquid Lyrics Revival",
+    "description": "A community-maintained Spicetify lyrics extension, forked from NMW's Liquid Lyrics. Smooth word-by-word synced lyrics, fullscreen mode, romanization, and an expandable sidebar card.",
     "preview": "preview.png",
-    "main": "https://nmwplays.github.io/Liquid-Lyrics/liquid-lyrics.js",
+    "main": "https://raw.githubusercontent.com/10k-Reaper/Liquid-Lyrics-Revival/spicetify/liquid-lyrics.js",
     "readme": "README.md",
     "authors": [
       {
         "name": "NMW",
         "url": "https://github.com/NMWplays"
+      },
+      {
+        "name": "10k-Reaper (fork maintainer)",
+        "url": "https://github.com/10k-Reaper"
       }
     ],
     "tags": ["lyrics", "fullscreen", "romanization", "glowify", "liquify"]

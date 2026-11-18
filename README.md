@@ -1,6 +1,6 @@
-# Liquid Lyrics
+# Liquid Lyrics Revival
 
-Liquid Lyrics is a modern Spicetify lyrics extension.
+Liquid Lyrics Revival is a modern Spicetify lyrics extension.
 
 It brings a smooth, theme-matching lyrics experience to Spotify with word-by-word synced
 lyrics, fullscreen lyrics, romanization support, an optional media player and an expandable
@@ -10,11 +10,36 @@ It was built alongside **Glowify** and **Liquify** and still fits those two best
 longer made just for them. Under any other theme it now picks up that theme's look instead.
 And if you want something else entirely, the settings menu lets you build your own.
 
+## Fork notice
+
+This is a community-maintained fork of
+[NMWplays/Liquid-Lyrics](https://github.com/NMWplays/Liquid-Lyrics), kept on
+Spicetify. It is based on the upstream `spicetify` branch, the last
+Spicetify-compatible line (tip commit `d5a453d`). The original project, design
+and code are by NMW.
+
+Fork source: `https://github.com/10k-Reaper/Liquid-Lyrics-Revival`
+
+### Modifications
+
+In accordance with AGPL-3.0, the changes in this fork are marked here:
+
+- Rebranded the extension as "Liquid Lyrics Revival", with in-app labels and
+  project/download links pointing at this fork.
+- Added an AGPL-3.0 SPDX header and NMW credit to `liquid-lyrics.js`.
+- Added `scripts/verify-classic-script.mjs`, which fails if the Spicetify build
+  regains `import.meta` or top-level `import`/`export` syntax.
+- Removed the upstream "SpotiKit move notice" modal and its
+  `spotikit-move-notice-dismissed` localStorage key; this fork stays on
+  Spicetify.
+- Updated this README and `manifest.json` for the fork, including the fork's
+  GitHub and release URLs.
+
 ## Features
 
 ### Smooth Word-by-Word Lyrics
 
-Liquid Lyrics supports smooth synced lyrics with fluid word-by-word animations.
+Liquid Lyrics Revival supports smooth synced lyrics with fluid word-by-word animations.
 
 For lyrics formats that do not support word-by-word syncing, it can also display classic
 block-style lyrics. If you prefer less movement, there are two calmer display modes.
@@ -52,8 +77,8 @@ Furigana only shows up on songs that actually have Japanese in them.
 
 ### Settings Menu
 
-Liquid Lyrics has a full settings menu. Open it from the gear in the top right of the lyrics
-page, or from the Spicetify profile menu under **Liquid Lyrics Settings**.
+Liquid Lyrics Revival has a full settings menu. Open it from the gear in the top right of the lyrics
+page, or from the Spicetify profile menu under **Liquid Lyrics Revival Settings**.
 
 Almost everything can be changed there: buttons, the interface, the lyrics page, fullscreen
 behaviour, backgrounds, the media player, the sidebar card and the lyrics themselves. There is
@@ -97,7 +122,7 @@ let the background fill Spotify's whole right sidebar.
 
 ### Fullscreen Lyrics Mode
 
-Liquid Lyrics includes a dedicated fullscreen lyrics view for a more immersive listening
+Liquid Lyrics Revival includes a dedicated fullscreen lyrics view for a more immersive listening
 experience, plus a cinema mode that fills the Spotify window without leaving it.
 
 In both, the interface fades away on its own after three seconds of stillness and comes back
@@ -117,7 +142,7 @@ skip stay within reach even when the song card sits far off to one side.
 
 ### Optional Media Player
 
-Liquid Lyrics includes an optional media player inside the lyrics view.
+Liquid Lyrics Revival includes an optional media player inside the lyrics view.
 
 There are two layouts to choose from, it can sit on either side and glides across when you
 switch, and you decide which track details it shows.
@@ -154,7 +179,7 @@ player enlarged in the middle instead, or the cover art spinning like a record.
 
 Spotify once had a sidebar lyrics card and later removed it.
 
-Liquid Lyrics brings this feature back with a modern design. The card can be collapsed,
+Liquid Lyrics Revival brings this feature back with a modern design. The card can be collapsed,
 opened, or expanded into a large view, and its height and minimum height are yours to set.
 
 <p align="center">
@@ -176,7 +201,7 @@ Your edits are saved locally on your device and are not uploaded or shared with 
 
 ## Themes
 
-Liquid Lyrics is designed around the style of **Glowify** and **Liquify**: glass effects,
+Liquid Lyrics Revival is designed around the style of **Glowify** and **Liquify**: glass effects,
 accent colors, rounded corners and smooth animations. Under those two it uses their own
 variables directly, so it is part of the theme rather than a guest in it.
 
@@ -203,19 +228,24 @@ off, most of it can be changed in the settings.
 
 ### Marketplace Installation
 
-Once Liquid Lyrics is available in the Spicetify Marketplace, you will be able to install it
-directly from there.
+Marketplace availability depends on the fork's listing. If it is listed, install
+it from there:
 
 1. Open Spotify
 2. Open the Spicetify Marketplace
-3. Search for Liquid Lyrics
+3. Search for Liquid Lyrics Revival
 4. Click install
 5. Reload Spotify
 
+If it is not listed, use the manual installation below.
+
 ### Manual Installation
 
-Download the latest `liquid-lyrics.js` file and place it inside your Spicetify extensions
-folder.
+Download the latest `liquid-lyrics.js` from this fork's releases:
+
+`https://github.com/10k-Reaper/Liquid-Lyrics-Revival/releases/latest`
+
+Then place it inside your Spicetify extensions folder.
 
 **Windows:**
 
@@ -238,7 +268,8 @@ spicetify apply
 
 ## Compatibility
 
-Liquid Lyrics is designed for the current Spotify and Spicetify UI.
+Liquid Lyrics Revival is designed for the current Spotify and Spicetify UI. This fork is
+based on the last Spicetify-compatible upstream build.
 
 Because Spotify updates its desktop client frequently, some parts of the extension may break
 after Spotify updates. Updates and fixes will be released when needed.
@@ -254,10 +285,15 @@ Planned improvements:
 
 ## Credits
 
-Created by NMW.
+Created by NMW. Original project:
+[NMWplays/Liquid-Lyrics](https://github.com/NMWplays/Liquid-Lyrics).
+
+This fork is maintained by `10k-Reaper` (`https://github.com/10k-Reaper`).
 
 Built alongside the Glowify and Liquify Spicetify themes.
 
 ## License
 
-This project is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). See the LICENSE file for details.
+This project is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). See the
+LICENSE file for details. Modifications in this fork are marked in the
+[Fork notice](#fork-notice) above.
