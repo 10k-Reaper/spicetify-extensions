@@ -20,14 +20,14 @@ It does not rewrite Spotify's own JavaScript. Each fix is a separate toggle, and
 - **Opt-in offscreen-animation pause.** Pauses endless CSS animations only while their element is outside the viewport and resumes them as soon as it scrolls in. Six offscreen ivLyrics background blobs cost 6.4 fps of scroll headroom in testing.
 - **Generic detection, no allow-list.** Reads every snippet, theme and extension `<style>` block, counts expensive CSS signals (`:has()`, blur, infinite animations, rule count) and turns the profiler's measured per-script cost into findings.
 - **Recommended preset.** One button enables the two CSS fixes plus the runtime CSS patches. Nothing cosmetic and nothing snippet-specific is included.
-- **Built-in profiler (Other tab).** Record a slow scroll and see callback time attributed by source, forced layout reads, long tasks and long-animation-frame data. Wrappers exist only while recording.
-- **Opt-in diagnostics (Other tab).** All three are off by default and install nothing while off:
+- **Built-in profiler (Advanced tab).** Record a slow scroll and see callback time attributed by source, forced layout reads, long tasks and long-animation-frame data. Wrappers exist only while recording.
+- **Opt-in diagnostics (Advanced tab).** All three are off by default and install nothing while off:
   - **Slow-frame recorder** keeps the last 30 long-animation frames (or long tasks on older clients) with the script files that ran in them, so you can reopen the panel after a hitch.
   - **Route change cost** reports the blocking time of the long frames in the 2 s after each route change. It measures jank, not download or first-paint time.
   - **Author check** is for extension authors: it records who registered a `setInterval`, a `MutationObserver` or a hot-event listener, then runs a fixed Home scroll and reports PASS/WARN/FAIL.
 - **Selector health.** A table of the Spotify class names and CSS variables this extension depends on, each marked OK, N/A here, NOT SEEN or STALE, with the detected Spotify version. A Spotify rename shows up as STALE instead of a fix silently doing nothing.
 - **Guided bisect (separate tab).** Halves the installed extension list and tells you which half to toggle in Marketplace, comparing every change against a noise band measured by two identical runs. It outlines the cards for the round but never turns an extension on or off itself, and never presses Remove or Install. Snippets and themes are not toggled.
-- **A panel that keeps its place.** Report, Other and Bisect swap inside the open panel and each keeps its own scroll offset. A **Reload Spotify** button in the header re-runs extensions from disk without `spicetify apply`.
+- **A panel that keeps its place.** Report, Bisect and Advanced swap inside the open panel and each keeps its own scroll offset. A **Reload Spotify** button in the header re-runs extensions from disk without `spicetify apply`.
 - **Measuring is a button, not a side effect.** Opening the panel only scans. Nothing scrolls and no popup closes until you press **Measure**. The panel reopens when the run ends, with an explanation if the Spotify window was hidden.
 - **Plain-language options.** Every switch has a one-sentence explanation and an expandable **What this changes technically** note.
 - **Live environment scan.** Marketplace extensions and snippets, the active theme, active backdrop-filter surfaces, the heaviest CSS sources ranked by cost signals, infinite-animation counts per source, and page zoom.
@@ -45,7 +45,7 @@ It does not rewrite Spotify's own JavaScript. Each fix is a separate toggle, and
 
 ### Manually
 
-1. Download [`perf-adviser.js`](https://github.com/10k-Reaper/spicetify-performance-adviser/releases/download/v1.0.1/perf-adviser.js) from the [v1.0.1 release](https://github.com/10k-Reaper/spicetify-performance-adviser/releases/tag/v1.0.1) (or `gh release download v1.0.1 -R 10k-Reaper/spicetify-performance-adviser`).
+1. Download [`perf-adviser.js`](https://github.com/10k-Reaper/spicetify-performance-adviser/releases/download/v1.1.0/perf-adviser.js) from the [v1.1.0 release](https://github.com/10k-Reaper/spicetify-performance-adviser/releases/tag/v1.1.0) (or `gh release download v1.1.0 -R 10k-Reaper/spicetify-performance-adviser`).
 2. Copy it into your Spicetify extensions folder:
    - Windows: `%APPDATA%\spicetify\Extensions\`
    - Linux/macOS: `~/.config/spicetify/Extensions/`
@@ -70,13 +70,13 @@ It does not rewrite Spotify's own JavaScript. Each fix is a separate toggle, and
 3. The findings block under the score lists live evidence: an active header blur, a running animation with the snippet/theme that declares it, CSS blocks with heavy selector counts, or the measured sources from your last profile.
 4. Use the toggles under **Fixes you can try**. Each one applies or removes its CSS immediately and is stored in `localStorage`. Every toggle has a short explanation and a **What this changes technically** note you can expand.
 5. To compare against unmodified Spotify, press **Pause all fixes** at the top of that card; **Resume all fixes** puts back exactly the switches you had chosen.
-6. Open the **Other** tab for the deeper diagnostics: **Attribute cost** (profiler), **Slow-frame recorder**, **Route change cost** and **Extension author check**. Turn on the recorders before the hitch or page change you want to catch; leave them off when you are not debugging, because while off they install no observer.
+6. Open the **Advanced** tab for the deeper diagnostics: **Attribute cost** (profiler), **Slow-frame recorder**, **Route change cost** and **Extension author check**. Turn on the recorders before the hitch or page change you want to catch; leave them off when you are not debugging, because while off they install no observer.
 7. **Selector health** is at the bottom of the **Report** tab and needs no toggle. It compares this build's selectors with the current page and the Spotify version; **STALE** means Spotify renamed something.
 8. **Bisect** is its own tab. It walks you through toggling half the installed extensions in Marketplace, reloading and measuring. **Open Marketplace → Installed** jumps to that page and outlines the cards for the round; an enable round opens **Extensions** instead, because Marketplace moves a removed extension's card there. If Marketplace collapses its tabs into a **More** menu, the round switches tabs through it. It never changes an extension itself.
-9. Extension authors: open the **Other** tab and turn **Author mode** on, read the three steps in the card, press **Reload Spotify** when the panel says a reload is pending, then press **Author check** on a source. The card explains what to do in plain language and keeps the mechanics, thresholds and wrapper costs inside **How this works technically**.
+9. Extension authors: open the **Advanced** tab and turn **Author mode** on, read the three steps in the card, press **Reload Spotify** when the panel says a reload is pending, then press **Author check** on a source. The card explains what to do in plain language and keeps the mechanics, thresholds and wrapper costs inside **How this works technically**.
 10. If you want a starting point, press **Apply recommended**.
 11. If the interface looks shrunken after backgrounding, press **Reset zoom to 100%** under **Page zoom**. This is a display fix, not an FPS fix.
-12. For a specific slow page, open **Other** and press **Start recording**, scroll for about ten seconds, then reopen the panel and press **Stop recording**. The profile names the extension or script that owns the cost.
+12. For a specific slow page, open **Advanced** and press **Start recording**, scroll for about ten seconds, then reopen the panel and press **Stop recording**. The profile names the extension or script that owns the cost.
 
 If you change an extension file by hand, the header's **Reload Spotify** button re-runs extensions from disk. It cannot pick up config changes made by `spicetify apply`; for those, restart Spotify.
 
@@ -148,7 +148,7 @@ The runtime patch knows only two selectors by name - track-peek's two global `:h
 | Bisect names something it could not find | The names come from the Marketplace manifest. Extensions installed by hand have no card, so toggle those where they live; the banner lists every name it could not outline. An enable round looks in **Installed** and then in **Extensions**, where Marketplace keeps a removed extension. |
 | An offscreen animation still runs | The switch only finds animations that exist at its refresh points (see Settings). Reopen the panel on that page to refresh the list. |
 | A menu or dialog looks wrong after enabling patches | Press **Pause all fixes**, then report the dialog with the **Copy report** text. |
-| Not sure what to disable | Open **Installed CSS (signals)**, then record a profile on the slow page from the **Other** tab. Any source that used 250 ms or more appears in the findings block at the top of the **Report** tab. |
+| Not sure what to disable | Open the CSS signals table under **(signals)**, then record a profile on the slow page from the **Advanced** tab. Any source that used 250 ms or more appears in the findings block at the top of the **Report** tab. |
 | Something else looks wrong | Press **Pause all fixes**, then report the issue with the **Copy report** text and your Spotify/Spicetify versions. |
 
 Uninstall in one line:
