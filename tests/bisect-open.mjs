@@ -1,7 +1,9 @@
-// bisect-open.mjs - the Bisect round can send the user to Marketplace ->
-// Installed and mark only the cards named in that round. Navigation, marking,
-// banner wording, the enable direction and cleanup are all checked here; no
-// extension is ever toggled by the test or the extension.
+// bisect-open.mjs - the Bisect round can send the user to Marketplace and mark
+// only the cards named in that round. A disable round marks Installed cards; an
+// enable round has to follow the card to the Extensions tab, because Marketplace
+// moves a disabled extension there and gives it an Install button. Navigation,
+// marking, banner wording and cleanup are checked here. No extension is ever
+// toggled by the test or by the extension.
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
@@ -16,32 +18,66 @@ const browserPath = fs.existsSync("C:/Program Files/Google/Chrome/Application/ch
   : "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe";
 
 const CARD_TITLES = ["adblockify", "Volume Percentage", "Quick Queue", "Modern ScrollBar"];
-const cards = CARD_TITLES.map((t) =>
-  '<div class="main-card-card marketplace-card--extension marketplace-card--installed">' +
+const card = (t, installed) =>
+  '<div class="main-card-card marketplace-card--extension' + (installed ? " marketplace-card--installed" : "") + '">' +
   '<div class="main-card-cardMetadata"><a class="main-cardHeader-link" title="' + t + '">' +
-  '<div class="main-cardHeader-text">' + t + "</div></a></div></div>"
-).join("");
+  '<div class="main-cardHeader-text">' + t + "</div></a>" +
+  '<div class="main-card-cardMetadata"></div></div></div>';
+
 const html = `<!doctype html><html><body>
+<style>
+  .Dropdown-root { display: none; }
+  body.dropdown-mode .Dropdown-root { display: block; }
+</style>
 <div id="host"></div>
 <div id="marketplace">
   <nav class="marketplace-tabBar">
-    <a href="##" class="marketplace-tabBar-headerItemLink marketplace-tabBar-active" id="tab-ext">Extensions</a>
-    <a href="##" class="marketplace-tabBar-headerItemLink" id="tab-installed">Installed</a>
+    <a href="##" class="marketplace-tabBar-headerItemLink" id="tab-ext">Extensions</a>
+    <a href="##" class="marketplace-tabBar-headerItemLink marketplace-tabBar-active" id="tab-installed">Installed</a>
+    <div class="Dropdown-root"><div class="Dropdown-control" id="more">More</div>
+      <div class="Dropdown-menu" id="more-menu" style="display:none">
+        <div class="Dropdown-option" data-tab="Extensions">Extensions</div>
+        <div class="Dropdown-option" data-tab="Installed">Installed</div>
+      </div>
+    </div>
   </nav>
-  <div id="cards"></div>
+  <div id="cards">${CARD_TITLES.map((t) => card(t, true)).join("")}</div>
+  <div id="browse"></div>
 </div>
 <script>
-  // Cards only mount after the Installed tab is clicked, like the real app.
-  document.getElementById("tab-installed").addEventListener("click", () => {
-    for (const el of document.querySelectorAll(".marketplace-tabBar-headerItemLink")) {
-      el.classList.remove("marketplace-tabBar-active");
-    }
-    document.getElementById("tab-installed").classList.add("marketplace-tabBar-active");
-    const box = document.getElementById("cards");
-    if (box.dataset.built) return;
-    box.dataset.built = "1";
-    box.innerHTML = ${JSON.stringify(cards)};
+  const renderBrowse = () => {
+    document.getElementById("browse").innerHTML = ${JSON.stringify(CARD_TITLES.map((t) => card(t, false)).join(""))};
+  };
+  const setActive = (id) => {
+    for (const el of document.querySelectorAll("#tab-ext, #tab-installed")) el.classList.remove("marketplace-tabBar-active");
+    document.getElementById(id).classList.add("marketplace-tabBar-active");
+    window.__activeTab = id === "tab-ext" ? "Extensions" : "Installed";
+  };
+  document.getElementById("tab-ext").addEventListener("click", () => { setActive("tab-ext"); renderBrowse(); });
+  document.getElementById("tab-installed").addEventListener("click", () => setActive("tab-installed"));
+  // Marketplace collapses every tab into a "More" dropdown when its width
+  // measurement comes back zero. In that state the links are absent and only
+  // the dropdown can switch tabs.
+  document.getElementById("more").addEventListener("mousedown", () => {
+    if (!document.body.classList.contains("dropdown-mode")) return;
+    const menu = document.getElementById("more-menu");
+    menu.style.display = menu.style.display === "none" ? "" : "none";
   });
+  for (const opt of document.querySelectorAll(".Dropdown-option")) {
+    opt.addEventListener("click", () => {
+      document.getElementById("more-menu").style.display = "none";
+      const ext = opt.dataset.tab === "Extensions";
+      setActive(ext ? "tab-ext" : "tab-installed");
+      if (ext) renderBrowse();
+    });
+  }
+  window.__dropdownMode = (on) => {
+    document.body.classList.toggle("dropdown-mode", !!on);
+    for (const id of ["tab-ext", "tab-installed"]) {
+      document.getElementById(id).classList.toggle("marketplace-tabBar-headerItemLink", !on);
+    }
+    document.getElementById("more-menu").style.display = "none";
+  };
 </script>
 </body></html>`;
 
@@ -101,13 +137,13 @@ const result = await page.evaluate(async () => {
   out.pendingDisable = api.state.pending;
 
   const clickText = (t) => {
-    const b = [...document.querySelectorAll("button")].find((x) => x.textContent.trim() === t);
+    const b = [...document.querySelectorAll(".perf-adviser-root button")].find((x) => x.textContent.trim() === t);
     if (b) b.click();
     return !!b;
   };
   clickText("Bisect");
   await new Promise((r) => setTimeout(r, 50));
-  out.panelButton = [...document.querySelectorAll("button")]
+  out.panelButton = [...document.querySelectorAll(".perf-adviser-root button")]
     .some((b) => b.textContent.trim() === "Open Marketplace -> Installed");
   out.panelInstruction = (document.querySelector(".perf-adviser-root") || {}).textContent || "";
 
@@ -120,7 +156,7 @@ const result = await page.evaluate(async () => {
     badges: [...document.querySelectorAll(".perf-adviser-bisect-badge")].map((b) => b.textContent),
     banner: (() => {
       const b = document.getElementById("perf-adviser-bisect-banner");
-      return b ? { text: b.textContent, names: b.dataset.names, action: b.dataset.action, role: b.getAttribute("role") } : null;
+      return b ? { text: b.textContent, names: b.dataset.names, action: b.dataset.action, role: b.getAttribute("role"), browse: b.dataset.browse } : null;
     })(),
     popupClosed: !document.querySelector(".perf-adviser-root"),
   };
@@ -146,12 +182,47 @@ const result = await page.evaluate(async () => {
     marks: api.marks,
   };
 
-  // A round that turns extensions back on uses the matching wording.
+  // A round that turns extensions back on. Marketplace has moved the disabled
+  // cards to the Extensions tab by now, so the Installed list no longer has
+  // them; the round must follow them there and use the Install badge/wording.
   api.apply(40, 1);
   out.pendingEnable = api.state.pending;
+  for (const c of [...document.querySelectorAll(".marketplace-card--installed")]) {
+    const title = (c.querySelector(".main-cardHeader-text") || {}).textContent || "";
+    if (out.pendingEnable.toggled.some((t) => t.toLowerCase() === title.trim().toLowerCase())) c.remove();
+  }
+  clickText("Report");
+  clickText("Bisect");
+  // The panel is closed after the last openTargets call; reopen it to check
+  // the enable round's button, then let openTargets hide it again.
+  window.__perfAdviser.open();
+  for (let i = 0; i < 100 && !document.querySelector(".perf-adviser-root"); i++) await new Promise((r) => setTimeout(r, 50));
+  clickText("Report");
+  clickText("Bisect");
+  await new Promise((r) => setTimeout(r, 80));
+  out.enableButton = [...document.querySelectorAll(".perf-adviser-root button")]
+    .some((b) => b.textContent.trim() === "Open Marketplace -> Extensions");
   out.enable = await api.openTargets();
-  out.enableBadges = [...document.querySelectorAll(".perf-adviser-bisect-badge")].map((b) => b.textContent);
+  out.enableBadges = [...document.querySelectorAll(".perf-adviser-bisect-badge")].map((b) => b.textContent.trim());
   out.enableBanner = (document.getElementById("perf-adviser-bisect-banner") || {}).textContent || "";
+  out.enableTab = (document.querySelector(".marketplace-tabBar-active") || {}).textContent || "";
+  out.enableHits = [...document.querySelectorAll(".perf-adviser-bisect-hit")]
+    .map((c) => c.querySelector(".main-cardHeader-text").textContent.trim());
+
+  // Same enable round, but Marketplace has collapsed its tabs into the "More"
+  // dropdown (a zero-width measurement at mount does this). The links are
+  // gone, so the round must switch tabs through the dropdown instead.
+  window.__dropdownMode(true);
+  out.dropdownMode = {
+    links: document.querySelectorAll(".marketplace-tabBar-headerItemLink").length,
+    control: !!document.querySelector(".marketplace-tabBar .Dropdown-control"),
+  };
+  out.dropdown = await api.openTargets();
+  out.dropdownBadges = [...document.querySelectorAll(".perf-adviser-bisect-badge")].map((b) => b.textContent.trim());
+  out.dropdownBanner = (document.getElementById("perf-adviser-bisect-banner") || {}).textContent || "";
+  out.dropdownActive = window.__activeTab;
+  out.dropdownHits = [...document.querySelectorAll(".perf-adviser-bisect-hit")]
+    .map((c) => c.querySelector(".main-cardHeader-text").textContent.trim());
   return out;
 });
 
@@ -168,6 +239,7 @@ const ok =
   result.panelInstruction.includes("Marketplace -> Installed") &&
   result.disabled.ok === true &&
   result.disabled.reason === "marked" &&
+  result.disabled.browse === 0 &&
   sorted(result.disabled.highlighted) === sorted(["adblockify", "Quick Queue", "Volume Percentage"]) &&
   result.disabled.missing.join(",") === "Ghost Extension" &&
   result.dom.route === "/marketplace" &&
@@ -178,7 +250,9 @@ const ok =
   result.dom.banner && result.dom.banner.action === "disable" &&
   result.dom.banner.role === "status" &&
   result.dom.banner.names.split("|").length === 4 &&
+  result.dom.banner.browse === "0" &&
   result.dom.banner.text.includes("Turn these extensions OFF") &&
+  result.dom.banner.text.includes("in Marketplace -> Installed") &&
   result.dom.banner.text.includes("1 not found on this page: Ghost Extension") &&
   result.dom.popupClosed === true &&
   result.marks.highlighted.length === 3 &&
@@ -187,8 +261,25 @@ const ok =
   result.beforeLeave === 1 &&
   result.afterLeave.hits === 0 && result.afterLeave.banner === false && result.afterLeave.marks.names.length === 0 &&
   result.pendingEnable.action === "enable" &&
+  result.enableButton === true &&
   result.enable.ok === true &&
-  result.enableBadges.join(",") === "Turn back ON for this round" &&
+  result.enable.browse === result.pendingEnable.toggled.length &&
+  result.enableHits.length === result.pendingEnable.toggled.length &&
+  result.enableBadges.length === result.pendingEnable.toggled.length &&
+  result.enableBadges.every((t) => t === "Install again for this round") &&
+  result.enableTab.trim() === "Extensions" &&
   result.enableBanner.includes("Turn these extensions back ON") &&
-  result.enableBanner.includes("Marketplace -> Installed");
+  result.enableBanner.includes("in Marketplace -> Extensions (Install)") &&
+  result.enableBanner.includes("Extensions tab") &&
+  result.enableBanner.includes("press Install to turn it back on") &&
+  result.dropdownMode.links === 0 &&
+  result.dropdownMode.control === true &&
+  result.dropdown.ok === true &&
+  result.dropdown.reason === "marked" &&
+  result.dropdown.browse === result.pendingEnable.toggled.length &&
+  result.dropdownBadges.length === result.pendingEnable.toggled.length &&
+  result.dropdownBadges.every((t) => t === "Install again for this round") &&
+  result.dropdownActive === "Extensions" &&
+  result.dropdownBanner.includes("in Marketplace -> Extensions (Install)") &&
+  result.dropdownBanner.includes("Extensions tab");
 process.exit(ok ? 0 : 1);

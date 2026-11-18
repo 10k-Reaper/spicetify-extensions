@@ -59,8 +59,14 @@ await new Promise((r) => setTimeout(r, 120));
 const scrolled = await page.evaluate(() => document.querySelector(".perf-adviser-root").scrollTop);
 const firstOpen = await page.evaluate(() => ({
   displays: window.__displayCount || 0,
-  unmeasured: document.querySelector(".perf-adviser-root").textContent.includes("Nothing has been measured yet"),
+  unmeasured: document.querySelector(".perf-adviser-root").textContent.includes("Press Measure to run a 5-second scroll test"),
 }));
+// Each tab keeps its own offset. Park Other at 300, then switch away.
+await clickText("Other");
+await new Promise((r) => setTimeout(r, 120));
+await page.evaluate(() => { document.querySelector(".perf-adviser-root").scrollTop = 300; });
+await new Promise((r) => setTimeout(r, 120));
+const otherScrolled = await page.evaluate(() => document.querySelector(".perf-adviser-root").scrollTop);
 await clickText("Bisect");
 await new Promise((r) => setTimeout(r, 120));
 const bisectView = await page.evaluate(() => {
@@ -81,6 +87,14 @@ const backToReport = await page.evaluate(() => ({
   view: document.querySelector(".perf-adviser-root").dataset.view,
   displays: window.__displayCount || 0,
 }));
+await clickText("Other");
+await new Promise((r) => setTimeout(r, 120));
+const backToOther = await page.evaluate(() => ({
+  scroll: document.querySelector(".perf-adviser-root").scrollTop,
+  view: document.querySelector(".perf-adviser-root").dataset.view,
+}));
+await clickText("Report");
+await new Promise((r) => setTimeout(r, 120));
 
 // "Measure" hides the modal, benchmarks, then reopens the panel.
 const clicked = await clickText("Measure");
@@ -94,16 +108,18 @@ const afterMeasure = await page.evaluate(() => {
   return { exists: !!root, scroll: root ? root.scrollTop : null, view: root ? root.dataset.view : null, displays: window.__displayCount || 0 };
 });
 
-console.log(JSON.stringify({ scrolled, firstOpen, bisectView, backToReport, clicked, afterMeasure }, null, 2));
+console.log(JSON.stringify({ scrolled, otherScrolled, firstOpen, bisectView, backToReport, backToOther, clicked, afterMeasure }, null, 2));
 await browser.close();
 server.close();
 
 const ok =
   scrolled === 500 &&
+  otherScrolled > 0 &&
   firstOpen.displays === 1 && firstOpen.unmeasured &&
-  bisectView.hasBisect && bisectView.reportHidden && bisectView.hiddenChildren === 1 &&
+  bisectView.hasBisect && bisectView.reportHidden && bisectView.hiddenChildren === 2 &&
   bisectView.rootScroll === 0 && bisectView.displays === 1 &&
   backToReport.scroll === 500 && backToReport.view === "report" && backToReport.displays === 1 &&
+  backToOther.scroll === otherScrolled && backToOther.view === "other" &&
   clicked === true &&
   afterMeasure.exists && afterMeasure.view === "report" && afterMeasure.displays === 2 &&
   Math.abs(afterMeasure.scroll - 500) <= 2;

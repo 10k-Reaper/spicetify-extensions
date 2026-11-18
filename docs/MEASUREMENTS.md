@@ -113,7 +113,7 @@ appends a Marketplace-style rule and a `colors.css`-style rule **later** in the
 document and asserts the purple border, the `#7b3bff` variable and the 72 px bar
 still win. Switching the toggle off restores the later stylesheet's values.
 
-## Bisect: opening Marketplace -> Installed
+## Bisect: opening Marketplace at the right tab
 
 A round is only useful if the user can find the cards it names. The candidate
 list now comes from the Marketplace installed-extension list when it is
@@ -127,10 +127,25 @@ clicks the Installed tab if it is not already active, and marks the cards for
 the round with a 3 px outline and a badge (`Remove for this round`, or
 `Turn back ON for this round` for an enable round). A fixed banner repeats the
 instruction, names anything it could not find, and has a **Dismiss** button.
-The extension never clicks Remove and never writes Marketplace storage; the
-toggles stay the user's job. Marks, badges and the banner are removed on
-dismiss, when the round is measured, when the bisect is reset, and on the next
-route change away from `/marketplace`.
+
+Marketplace removes a disabled extension from Installed and puts its card on
+the **Extensions** tab with an Install button. An enable round therefore checks
+Installed first, then switches to Extensions for anything it did not find,
+marks those cards and uses the badge `Install again for this round`; the
+banner, the panel instruction and the panel button
+(**Open Marketplace -> Extensions**) all say so, and the banner reports how
+many cards were found there. This was the bug behind "outlines the cards" doing
+nothing on a re-install step.
+
+Marketplace can also collapse its whole tab bar into a single **More**
+dropdown when its width measurement comes back zero at mount. The round accepts
+that shape too: it opens the dropdown and picks Installed or Extensions from it,
+so a slow or crowded top bar no longer produces a `no-tabbar` result.
+
+The extension never clicks Remove or Install and never writes Marketplace
+storage; the toggles stay the user's job. Marks, badges and the banner are
+removed on dismiss, when the round is measured, when the bisect is reset, and
+on the next route change away from `/marketplace`.
 
 Live check (Spotify 1.3.8.620, 21 installed cards): the push landed on
 `/marketplace` with the Installed tab active, the two requested cards were
@@ -138,7 +153,8 @@ outlined and badged, a third name was reported as not found, Dismiss cleared
 everything, and a synthetic route change to `/` cleared a fresh set. The panel
 also showed the new button for a pending disable round. `tests/bisect-open.mjs`
 covers the route push, the tab click, matching, the missing-name report, banner
-wording, the enable direction, dismiss and route cleanup.
+wording, the disable path, the enable path through the Extensions tab with the
+Install badge, dismiss and route cleanup.
 
 ## Hover cost and idle `:has()` rules
 
@@ -278,7 +294,7 @@ These are opt-in debugging aids, not performance fixes. Each has a test driver i
 `tests/`; run them with plain Node (Puppeteer + a local Chrome). The live numbers
 below were taken on the same machine on 2026-11-14, Spotify 1.3.8.620.
 
-### Slow-frame recorder and page navigation timing
+### Slow-frame recorder and route change cost
 
 Both share one `PerformanceObserver` (`long-animation-frame` where available,
 `longtask` otherwise) and keep a 30-entry ring buffer. With both off the observer
@@ -316,10 +332,14 @@ Fifteen selectors and variables this extension depends on, checked when the
 panel opens. Statuses: **OK** (matched on its expected route), **N/A here**
 (wrong route or the owning extension is not installed), **NOT SEEN** (expected
 here but not matched), **STALE** (matched on an earlier Spotify version, not on
-this one). The Spotify version comes from `Spicetify.Platform.version`, with the
-user-agent as a fallback, and the last healthy version is kept in
-`localStorage["perf-adviser:selector-health"]`. The test covers all four
-statuses and version persistence.
+this one). A row may list more than one selector: the sticky-header row accepts
+`.Root__globalNav` and the older `.main-topBar-background`, and shows whichever
+one matched. Spotify 1.3.8.620 mounts `.Root__globalNav` and no longer mounts
+`.main-topBar-background`, so the row used to sit at **NOT SEEN** even though
+the surface was there. The Spotify version comes from
+`Spicetify.Platform.version`, with the user-agent as a fallback, and the last
+healthy version is kept in `localStorage["perf-adviser:selector-health"]`. The
+test covers all four statuses, both top-bar names and version persistence.
 
 ### Author check: calibration and thresholds
 
@@ -380,27 +400,28 @@ this report, not of the test.
 ### Panel scroll and in-place tabs
 
 A refresh, a tab switch or a measurement used to reset the panel to the top.
-The regression test scrolls Report to 500 px, switches to Bisect (which starts
-at 0), switches back (500 px restored), then presses **Measure** and checks that
-Report is still at 500 px. Two causes were found: after `PopupModal.hide()` the
-old root is detached and reports `scrollTop 0`, and the new content is laid out
-a frame after `display()`, so assigning `scrollTop` immediately was clamped to
-0. The offset is saved before hiding, ignored for a detached root, and restored
+The regression test scrolls Report to 500 px, parks Other at its own offset,
+switches to Bisect (which starts at 0), switches back (500 px restored), checks
+the Other offset, then presses **Measure** and checks that Report is still at
+500 px. Two causes were found: after `PopupModal.hide()` the old root is
+detached and reports `scrollTop 0`, and the new content is laid out a frame
+after `display()`, so assigning `scrollTop` immediately was clamped to 0. The
+offset is saved before hiding, ignored for a detached root, and restored
 immediately and again after layout.
 
 The tab switch itself no longer calls the popup at all. It swaps the content of
 the mounted `.perf-adviser-root`, so the modal node and its scroll offset stay
 put. The swap is deferred by one task because replacing the clicked tab button
 synchronously makes Spotify treat the detached target as an outside click and
-close the modal. Live counts before and after Report -> Bisect -> Report:
-`PopupModal.display` 1 -> 1, `PopupModal.hide` 0 -> 0, same root and same modal
-node.
+close the modal. Live counts before and after Report -> Other -> Bisect ->
+Report: `PopupModal.display` 1 -> 1, `PopupModal.hide` 0 -> 0, same root and
+same modal node.
 
 ### Measure is an explicit action
 
 Opening the panel runs the scan only. The score card shows `--`, the text
-"Nothing has been measured yet" and a primary **Measure** button; live check
-confirmed one `display()` call and no `hide()` on open. Pressing Measure hides
+"Press Measure to run a 5-second scroll test" and a primary **Measure** button;
+live check confirmed one `display()` call and no `hide()` on open. Pressing Measure hides
 the modal for the run and runs one 5 s measurement. Live: the panel reopened
 after 8 s with a reading, `display()` went 1 -> 2 and `hide()` 0 -> 1.
 
@@ -445,15 +466,15 @@ wrapped callback while idle. Nothing is timed until an author check runs.
 | `peek-loop.mjs` | the observer no longer retriggers itself | original fixture: 5,000 callbacks (capped, fail); fixed: 2 callbacks in 300 ms, 4 after removal; CSSOM rewrite 0 records vs 1 control |
 | `lag-recorder.mjs` | ring buffer, LoAF entries, clear, report lines | 30-entry cap, entries carry script files |
 | `nav-timing.mjs` | 2 s window, normalisation, cost formula | `/playlist/*` 370.4 ms; `/search` 0 |
-| `selector-health.mjs` | all four statuses and version persistence | OK / N/A here / NOT SEEN / STALE |
+| `selector-health.mjs` | all four statuses, both top-bar names, version persistence | OK / N/A here / NOT SEEN / STALE |
 | `author-check.mjs` | inventory, PASS/WARN/FAIL, startup handlers, wrapper survival | fixture 200.04 ms/s, 451 calls / 1,804.6 ms, observer+interval FAIL |
 | `bisect.mjs` | halving, noise rule, combination-only case | finds `b`; pair ends inconclusive |
-| `panel-scroll.mjs` | scroll survives tab switch and measurement; tabs do not redisplay | 500 px preserved; display 1 -> 2 only on Measure |
+| `panel-scroll.mjs` | scroll survives per-tab switches and measurement; tabs do not redisplay | 500 px Report and Other offsets preserved; display 1 -> 2 only on Measure |
 | `scroll-scope.mjs` | Home-only scroll class, no lyrics/library leakage, pause clears it | lyrics: no class, button visible; Home: class + hidden, removed at rest |
 | `park-hover.mjs` | hover/focus rules stay live while an idle `:has()` rule is parked | parked 1, active true, both state rules intact |
 | `measure-hidden.mjs` | Measure cannot hang with no animation frames | abort 2.2 s, panel reopened, previous result kept |
 | `theme-tweaks.mjs` | cosmetic tweaks beat later, equal-specificity Marketplace/theme CSS | border `2px solid rgb(129, 79, 255)`, variable `#7b3bff`, bar 72 px |
-| `bisect-open.mjs` | round opens Marketplace -> Installed, marks only its cards, cleans up | 3 of 4 cards marked, 1 reported missing, marks cleared on dismiss and route change |
+| `bisect-open.mjs` | a round opens the right Marketplace tab, marks only its cards, cleans up | disable: 3 of 4 cards marked, 1 missing; enable: 1 card found on Extensions with the Install badge; the same round also works through the collapsed **More** dropdown; marks cleared on dismiss and route change |
 | `offscreen-anims.mjs` | only endless animations outside the viewport are paused and resumed | 1 paused / 1 running, late mount caught, 0 styles left when off |
 
 ## Caveats, stated plainly

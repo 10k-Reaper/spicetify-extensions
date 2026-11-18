@@ -1760,7 +1760,9 @@
   const SELECTOR_STORE = "perf-adviser:selector-health";
   const TRACKLIST_ROUTES = ["/playlist/*", "/album/*", "/artist/*", "/collection/tracks"];
   const SELECTORS = [
-    { id: "header-topbar", label: "Sticky header surface", sel: ".main-topBar-background", routes: ["*"] },
+    // The top bar was renamed: current builds mount .Root__globalNav, older
+    // ones .main-topBar-background. Either one means the surface exists.
+    { id: "header-topbar", label: "Sticky header surface", sel: [".Root__globalNav", ".main-topBar-background"], routes: ["*"] },
     { id: "header-search", label: "Search category header", sel: ".search-searchCategory-SearchCategory", routes: ["/search"] },
     { id: "header-home-chips", label: "Home filter chips", sel: ".main-home-filterChipsSection", routes: ["/"] },
     { id: "header-tracklist", label: "Tracklist header", sel: ".main-trackList-trackListHeader", routes: TRACKLIST_ROUTES },
@@ -1821,11 +1823,15 @@
       const routeOk = def.routes.includes("*") || def.routes.includes(routeNow);
       const available = !def.requires || selectorInstalled(def.requires);
       const enabled = !def.enabled || def.enabled();
+      const sels = Array.isArray(def.sel) ? def.sel : [def.sel];
       let present = false;
+      let matched = "";
       if (def.kind === "cssvar") {
-        try { present = !!getComputedStyle(document.documentElement).getPropertyValue(def.sel).trim(); } catch (e) { present = false; }
+        try { present = !!getComputedStyle(document.documentElement).getPropertyValue(sels[0]).trim(); } catch (e) { present = false; }
       } else {
-        try { present = !!document.querySelector(def.sel); } catch (e) { present = false; }
+        for (const sel of sels) {
+          try { if (document.querySelector(sel)) { present = true; matched = sel; break; } } catch (e) { /* ignore */ }
+        }
       }
       let status;
       if (!available) {
@@ -1842,7 +1848,7 @@
       } else {
         status = "NOT SEEN";
       }
-      rows.push({ ...def, status, present, routeOk, available, enabled });
+      rows.push({ ...def, sel: matched || sels[0], selText: sels.join(" | "), status, present, routeOk, available, enabled });
     }
     stored.spotifyVersion = ver.version;
     stored.versionSource = ver.source;
@@ -2177,7 +2183,7 @@
   let authorCheck = null;
   let panelView = "report";
   let panelRoot = null;
-  const panelScroll = { report: 0, bisect: 0 };
+  const panelScroll = { report: 0, other: 0, bisect: 0 };
 
   // Switching tabs rebuilds the panel, but each tab keeps its own scroll offset.
   function savePanelScroll() {
@@ -2206,11 +2212,10 @@
     }
     card.appendChild(top);
     card.appendChild(h("div", `font-size:12px;color:${C.sub};line-height:1.45;`,
-      "When scrolling is slow and you have several extensions, this narrows down which one is responsible. It never turns anything on or off: it tells you which half to toggle in Marketplace -> Installed, and can open that page and outline those cards for you. You still do the toggling, you reload, and you measure again. " +
-      "Each change is compared with a noise band measured by two identical runs, so a difference smaller than normal run-to-run variation is never called a result."));
+      "When scrolling is slow and you have several extensions, this narrows down which one is responsible. It never toggles anything: it names the half to change and can open Marketplace with those cards outlined. You do the toggling, reload and measure again. " +
+      "Each change is compared with a noise band measured by two identical runs."));
     card.appendChild(note("How a round works technically",
-      "The candidate list is the Marketplace installed-extension list (the same names as the cards), falling back to Spicetify.Config.extensions minus Perf Adviser. Baseline and calibration runs establish the spread between two identical measurements; every later round must beat that band. A round toggles half the remaining candidates, measures, and keeps the half that reproduced the change. One culprit per run; 'Find another' starts over with it excluded. " +
-      "Marketplace toggles only take effect after a reload, so each round needs one. Snippets and themes are not toggled by this workflow."));
+      "Candidates are the Marketplace installed-extension names (falling back to Spicetify.Config.extensions minus Perf Adviser). Once an extension is removed, Marketplace moves its card to the Extensions tab, so an enable round outlines it there. Baseline and calibration runs set the noise band; a round toggles half the remaining candidates and keeps the half that reproduced the change. One culprit per run. Snippets and themes are not toggled."));
 
     if (!bisect) {
       const names = extensionNames(s);
@@ -2238,7 +2243,7 @@
           bisectInstruction()));
         if (!marketplaceInstalled()) {
           card.appendChild(h("div", `font-size:12px;color:${C.amber};line-height:1.45;`,
-            "Marketplace is not installed, so there is no Installed page to open. Turn these extensions on or off wherever they are installed, reload, then measure this round."));
+            "Marketplace is not installed, so there is no card list to open. Change these extensions wherever they are installed, reload, then measure this round."));
         }
       } else if (bisect.phase === "calibrate") {
         card.appendChild(h("div", `font-size:12px;color:${C.text};background:rgba(76,179,212,.10);border:1px solid rgba(76,179,212,.35);border-radius:10px;padding:9px 12px;line-height:1.45;`,
@@ -2257,7 +2262,8 @@
         btns.appendChild(btn("Reload Spotify", reloadSpotify));
       }
       if (bisect.pending && marketplaceInstalled()) {
-        btns.appendChild(btn("Open Marketplace -> Installed", () => { openBisectTargets(bisect.pending.toggled); }));
+        btns.appendChild(btn(bisect.pending.action === "enable" ? "Open Marketplace -> Extensions" : "Open Marketplace -> Installed",
+          () => { openBisectTargets(bisect.pending.toggled); }));
       }
       if (bisect.pending) btns.appendChild(btn("Copy instruction", () => copyText(bisectInstruction())));
       btns.appendChild(btn("Copy report", () => copyText(bisectReportText())));
@@ -2434,6 +2440,10 @@
     return k === key || (key.length >= 4 && k.length >= 4 && (k.indexOf(key) >= 0 || key.indexOf(k) >= 0));
   }
 
+  // Marketplace keeps a disabled extension on the Extensions tab with an
+  // Install button, and removes it from Installed. An enable round therefore
+  // has to look in both places; the old code only searched Installed and left
+  // the cards it promised to outline unmarked.
   async function openBisectTargets(namesArg) {
     const names = (Array.isArray(namesArg) && namesArg.length
       ? namesArg
@@ -2450,39 +2460,99 @@
     }
     try {
       const deadline = Date.now() + 9000;
-      let tabs = [];
+      // Marketplace puts its tabs in the top bar and moves the whole set into a
+      // "More" dropdown when the content width measured zero at mount (a cold
+      // start can leave it that way for a while). The dropdown is the same tab
+      // bar, so accept either shape.
+      const dropdownControl = () => document.querySelector(".marketplace-tabBar .Dropdown-control");
+      let ready = null;
       while (Date.now() < deadline) {
-        tabs = [...document.querySelectorAll(".marketplace-tabBar-headerItemLink")];
-        if (tabs.length) break;
+        const links = document.querySelectorAll(".marketplace-tabBar-headerItemLink");
+        ready = links.length ? links : dropdownControl();
+        if (ready) break;
         await sleep(120);
       }
-      if (!tabs.length) return Object.assign({}, empty, { reason: "no-tabbar" });
-      const tab = tabs.find((el) => /^installed$/i.test((el.textContent || "").trim()));
-      if (tab && !/\bmarketplace-tabBar-active\b/.test(String(tab.className))) tab.click();
-      let cards = [];
-      while (Date.now() < deadline) {
-        cards = [...document.querySelectorAll(".marketplace-card--installed")];
-        if (cards.some((c) => cardTitle(c))) break;
-        await sleep(120);
-      }
-      if (!cards.length) return Object.assign({}, empty, { reason: "no-cards" });
-      await sleep(250); // let the tab switch repaint before touching the DOM
-      cards = [...document.querySelectorAll(".marketplace-card--installed")];
+      if (!ready) return Object.assign({}, empty, { reason: "no-tabbar" });
+
+      const activateTab = async (label) => {
+        const re = new RegExp("^" + label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$", "i");
+        const tab = [...document.querySelectorAll(".marketplace-tabBar-headerItemLink")]
+          .find((el) => re.test((el.textContent || "").trim()));
+        if (tab) {
+          if (!/\bmarketplace-tabBar-active\b/.test(String(tab.className))) tab.click();
+          return "tab";
+        }
+        const dd = dropdownControl();
+        if (!dd) return "";
+        // The control opens on mousedown, not click.
+        dd.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+        let option = null;
+        const until = Date.now() + 2000;
+        while (Date.now() < until) {
+          option = [...document.querySelectorAll(".Dropdown-option")]
+            .find((el) => re.test((el.textContent || "").trim()));
+          if (option) break;
+          await sleep(60);
+        }
+        if (!option) {
+          dd.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+          return "";
+        }
+        option.click();
+        return "menu";
+      };
+
+      const openTab = async (label, cardSelector) => {
+        await activateTab(label);
+        let cards = [];
+        while (Date.now() < deadline) {
+          cards = [...document.querySelectorAll(cardSelector)];
+          if (cards.some((c) => cardTitle(c))) break;
+          await sleep(120);
+        }
+        await sleep(250); // let the tab switch repaint before touching the DOM
+        return [...document.querySelectorAll(cardSelector)];
+      };
+
       ensureMarkStyle();
       const highlighted = [];
       const missing = [];
-      for (const name of names) {
-        const key = nameKey(name);
-        const card = cards.find((c) => cardMatches(c, key));
-        if (!card) { missing.push(name); continue; }
-        card.classList.add(MARK_CLASS);
-        if (!card.querySelector("." + BADGE_CLASS)) {
-          const badge = h("div", "", action === "enable" ? "Turn back ON for this round" : "Remove for this round");
-          badge.className = BADGE_CLASS;
-          (card.querySelector(".main-card-cardMetadata") || card).appendChild(badge);
+      const mark = (cards, wanted, where) => {
+        const still = [];
+        for (const name of wanted) {
+          const key = nameKey(name);
+          const card = cards.find((c) => cardMatches(c, key));
+          if (!card) { still.push(name); continue; }
+          card.classList.add(MARK_CLASS);
+          if (!card.querySelector("." + BADGE_CLASS)) {
+            const badge = h("div", "", action === "enable"
+              ? (where === "browse" ? "Install again for this round" : "Turn back ON for this round")
+              : "Remove for this round");
+            badge.className = BADGE_CLASS;
+            (card.querySelector(".main-card-cardMetadata") || card).appendChild(badge);
+          }
+          highlighted.push(cardTitle(card) || name);
         }
-        highlighted.push(cardTitle(card) || name);
+        return still;
+      };
+
+      let cards = await openTab("Installed", ".marketplace-card--installed");
+      if (cards.length) {
+        missing.push(...mark(cards, names, "installed"));
+      } else {
+        missing.push(...names);
       }
+
+      let inBrowse = 0;
+      if (missing.length && action === "enable") {
+        const toFind = missing.splice(0, missing.length);
+        const browse = await openTab("Extensions", ".marketplace-card--extension");
+        const rest = mark(browse, toFind, "browse");
+        inBrowse = toFind.length - rest.length;
+        missing.push(...rest);
+      }
+
+      if (!highlighted.length) return Object.assign({}, empty, { reason: "no-match", missing });
       bisectMarks = { names, highlighted, missing, at: new Date().toISOString() };
 
       const banner = h("div", "");
@@ -2490,9 +2560,18 @@
       banner.setAttribute("role", "status");
       banner.dataset.names = names.join("|");
       banner.dataset.action = action;
+      banner.dataset.browse = String(inBrowse);
+      const where = action === "enable"
+        ? (inBrowse && inBrowse === highlighted.length
+          ? "Marketplace -> Extensions (Install)"
+          : inBrowse
+            ? "Marketplace -> Installed and Extensions"
+            : "Marketplace -> Installed")
+        : "Marketplace -> Installed";
       banner.appendChild(h("div", "flex:1 1 auto;",
         (action === "enable" ? "Turn these extensions back ON" : "Turn these extensions OFF") +
-        " in Marketplace -> Installed: the " + highlighted.length + " outlined card(s) are this round's set. " +
+        " in " + where + ": the " + highlighted.length + " outlined card(s) are this round's set. " +
+        (inBrowse ? inBrowse + " of them are on the Extensions tab because Marketplace moves a disabled extension there; press Install to turn it back on. " : "") +
         (missing.length ? missing.length + " not found on this page: " + missing.join(", ") + ". " : "") +
         "Reload Spotify afterwards, then measure again. Perf Adviser changes nothing itself."));
       const close = h("button", "", "Dismiss");
@@ -2506,6 +2585,7 @@
         highlighted,
         missing,
         action,
+        browse: inBrowse,
         route: route(),
       };
     } catch (e) {
@@ -2516,9 +2596,10 @@
   function bisectInstruction() {
     if (!bisect || !bisect.pending) return "";
     const p = bisect.pending;
+    const where = p.action === "enable" ? "Marketplace -> Extensions (or Installed if the card is still there)" : "Marketplace -> Installed";
     return "Turn " + (p.action === "disable" ? "OFF" : "back ON") + " these " + p.toggled.length +
-      " extension(s) in Marketplace -> Installed: " + p.toggled.join(", ") +
-      ". The Open Marketplace -> Installed button in this panel jumps to that page and outlines the cards for this round, so the outlined ones are the only ones to change. " +
+      " extension(s) in " + where + ": " + p.toggled.join(", ") +
+      ". The button in this panel opens Marketplace and outlines the cards for this round, so the outlined ones are the only ones to change. " +
       "Then reload Spotify (or restart it), open Perf Adviser -> Bisect and click Measure this round. Leave every other extension as it is.";
   }
 
@@ -3108,7 +3189,6 @@
     const head = h("div", "display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;");
     const titleWrap = h("div", "display:flex;flex-direction:column;gap:2px;");
     titleWrap.appendChild(h("div", `font-size:12px;color:${C.sub};`, "v" + VERSION + " - " + (b ? b.route : s.route) + " - nothing is disabled automatically"));
-    titleWrap.appendChild(h("div", `font-size:11px;color:${C.sub};`, "Find out what is slowing Spotify down and turn fixes on or off yourself. Extensions, snippets and themes are never changed."));
     head.appendChild(titleWrap);
     const headRight = h("div", "display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;");
     headRight.appendChild(h("span", `font-size:11px;color:${C.sub};`, "no network"));
@@ -3120,8 +3200,8 @@
     head.appendChild(headRight);
     root.appendChild(head);
 
-    // report / bisect tabs; only one body is shown, both are built so switching
-    // back does not need a measurement
+    // report / other / bisect tabs; only one body is shown, all are built so
+    // switching back does not need a measurement
     const tabBar = h("div", "display:flex;gap:6px;border-bottom:1px solid rgba(128,128,128,.18);padding-bottom:6px;");
     const tabBtn = (label, view) => {
       const active = panelView === view;
@@ -3133,12 +3213,17 @@
       return el;
     };
     tabBar.appendChild(tabBtn("Report", "report"));
+    tabBar.appendChild(tabBtn("Other", "other"));
     tabBar.appendChild(tabBtn("Bisect", "bisect"));
     root.appendChild(tabBar);
 
     const body = h("div", "display:flex;flex-direction:column;gap:16px;");
     body.style.display = panelView === "report" ? "" : "none";
     root.appendChild(body);
+
+    const oBody = h("div", "display:flex;flex-direction:column;gap:16px;");
+    oBody.style.display = panelView === "other" ? "" : "none";
+    root.appendChild(oBody);
 
     const bBody = h("div", "display:flex;flex-direction:column;gap:16px;");
     bBody.style.display = panelView === "bisect" ? "" : "none";
@@ -3169,15 +3254,17 @@
     scoreBtns.appendChild(btn("Copy report", () => copyText(reportText(s, b, p))));
     score.appendChild(scoreBtns);
     body.appendChild(score);
-    if (!b) {
-      body.appendChild(h("div", `font-size:12px;color:${C.sub};margin-top:-8px;line-height:1.45;`,
-        "Nothing has been measured yet. Press Measure to run a 5-second scroll test on the page you are on; the panel closes while it scrolls and comes back with the result."));
-    } else if (b.runs === 1) {
-      body.appendChild(h("div", `font-size:11px;color:${C.sub};margin-top:-8px;`, "One short run (after a warm-up). Home FPS also depends on where the mouse rests: over a card, Spotify's play-button tooltip churns every scroll frame. 'Measure again' runs 2 x 6 s."));
-    }
 
-    // findings
-    const findings = section("What to change");
+    // findings. The old "What to change" label is gone; the line that used to
+    // sit under the FPS card now starts this block, at the same height.
+    const findings = h("div", "display:flex;flex-direction:column;gap:8px;");
+    if (!b) {
+      findings.appendChild(h("div", `font-size:12px;color:${C.sub};line-height:1.45;`,
+        "Press Measure to run a 5-second scroll test on the page you are on; the panel closes while it scrolls and comes back with the result."));
+    } else if (b.runs === 1) {
+      findings.appendChild(h("div", `font-size:11px;color:${C.sub};line-height:1.45;`,
+        "One short run after a warm-up. Home FPS also depends on where the mouse rests: over a card, Spotify's play-button tooltip churns every scroll frame. 'Measure again' runs 2 x 6 s."));
+    }
     if (!recs.length) {
       findings.appendChild(h("div", `font-size:13px;color:${C.green};`, "No live offender right now: header blur, zoom, CSS-editor leftovers and infinite animations are clean. Record a profile on a slow page for per-script cost."));
     }
@@ -3208,7 +3295,6 @@
       ? (s.coverPause ? "paused by fix" : "animating") + (s.coverSource ? " - from " + s.coverSource.name : "")
       : "not present", s.coverRotating && !s.coverPause ? C.amber : C.green));
     env.appendChild(row("Injected CSS", s.cssOff ? "paused by master switch" : "active", s.cssOff ? C.amber : C.green));
-    env.appendChild(row("Runtime patches", s.cssOff ? "paused by master switch" : s.runtimePatch ? "on" : "off", s.cssOff ? C.amber : s.runtimePatch ? C.green : C.sub));
     env.appendChild(row("CSS editor", s.cssEditorChars == null ? "unknown" : s.cssEditorChars ? s.cssEditorChars + " chars" : "empty", s.cssEditorChars ? C.amber : C.green));
     env.appendChild(row("Page zoom", (s.zoom.level == null ? "unknown" : zoomPct(s.zoom.level)) + " / DPR " + s.zoom.dpr.toFixed(3), s.zoom.level === 0 ? C.green : C.amber));
     body.appendChild(env);
@@ -3437,9 +3523,8 @@
     if (rt.mirrored) rtTitle.appendChild(pill(rt.mirrored + " mirrored", C.blue));
     rtText.appendChild(rtTitle);
     rtText.appendChild(h("div", `font-size:12px;color:${C.sub};line-height:1.45;`,
-      "Makes Spotify's own styles cheaper to check when you move the mouse over things. It rewrites unused :has() selectors at runtime and puts them back as soon as their target appears; no CSS is added to the page. " +
-      "If a hover effect ever behaves strangely, turn this off first and see whether it goes away." +
-      (rt.live ? " " + rt.live + " :has() rule(s) are currently in use and are never rewritten." : "")));
+      "Makes hovering cheaper by parking :has() rules that currently match nothing and restoring them when their target appears. If a hover ever looks wrong, turn this off first." +
+      (rt.live ? " " + rt.live + " :has() rule(s) are in use and are never rewritten." : "")));
     rtText.appendChild(note("What this changes technically",
       "Chromium treats any live :has() rule as document-wide, so a hover can restyle far more of the page than the hovered control. " +
       "Rules that match nothing are given an inert selector (parked) and restored when a matching node appears; the two global track-peek anchors are mirrored with classes instead. " +
@@ -3465,8 +3550,8 @@
     rtSec.appendChild(rtCard);
     body.appendChild(rtSec);
 
-    // profiler
-    const profile = section("Profile a slow page");
+    // ------------------------------------------------ other tab: cost tools
+    // profiler (attribute cost)
     const pCard = h("div", `display:flex;flex-direction:column;gap:10px;background:${C.card};border-radius:12px;padding:12px 14px;`);
     const pTop = h("div", "display:flex;align-items:center;gap:12px;justify-content:space-between;flex-wrap:wrap;");
     const pText = h("div", "display:flex;flex-direction:column;gap:4px;");
@@ -3516,11 +3601,9 @@
         ));
       }
     }
-    profile.appendChild(pCard);
-    body.appendChild(profile);
+    oBody.appendChild(pCard);
 
-    // ------------------------------------------------ what just lagged? (opt-in)
-    const lagSec = section("What just lagged?");
+    // ------------------------------------------------ slow-frame recorder
     const lagCard = h("div", `display:flex;flex-direction:column;gap:10px;background:${C.card};border-radius:12px;padding:12px 14px;`);
     const lagTop = h("div", "display:flex;align-items:center;gap:12px;justify-content:space-between;flex-wrap:wrap;");
     const lagText = h("div", "display:flex;flex-direction:column;gap:3px;flex:1 1 340px;min-width:260px;");
@@ -3583,11 +3666,9 @@
     } else {
       lagCard.appendChild(h("div", `font-size:12px;color:${C.sub};`, "Nothing is being observed. Idle cost while off is zero: no observer, no timer."));
     }
-    lagSec.appendChild(lagCard);
-    body.appendChild(lagSec);
+    oBody.appendChild(lagCard);
 
-    // ------------------------------------------------ page navigation timing
-    const navSec = section("Page navigation timing");
+    // ------------------------------------------------ route change cost
     const navCard = h("div", `display:flex;flex-direction:column;gap:10px;background:${C.card};border-radius:12px;padding:12px 14px;`);
     const navTop = h("div", "display:flex;align-items:center;gap:12px;justify-content:space-between;flex-wrap:wrap;");
     const navText = h("div", "display:flex;flex-direction:column;gap:3px;flex:1 1 340px;min-width:260px;");
@@ -3640,10 +3721,9 @@
       navBtns.appendChild(btn("Clear", () => { lag.nav.clear(); refresh(); }));
       navCard.appendChild(navBtns);
     } else {
-      navCard.appendChild(h("div", `font-size:12px;color:${C.sub};`, "Idle cost while off is zero: the shared observer is disconnected when both this and the slow-frame recorder are off."));
+      navCard.appendChild(h("div", `font-size:12px;color:${C.sub};`, "Nothing is recorded while this is off."));
     }
-    navSec.appendChild(navCard);
-    body.appendChild(navSec);
+    oBody.appendChild(navCard);
 
     // ------------------------------------------------ selector health
     const selSec = section("Selector health");
@@ -3653,13 +3733,10 @@
       const missing = health.rows.filter((r) => r.status === "NOT SEEN");
       const topLine = h("div", "display:flex;align-items:center;gap:8px;flex-wrap:wrap;");
       topLine.appendChild(h("div", `font-size:13px;color:${C.text};`, "Spotify " + health.version));
-      topLine.appendChild(pill(health.source, C.sub));
       topLine.appendChild(pill(health.rows.filter((r) => r.status === "OK").length + " OK", C.green));
       if (missing.length) topLine.appendChild(pill(missing.length + " not seen", C.amber));
       if (stale.length) topLine.appendChild(pill(stale.length + " stale", C.red));
       selCard.appendChild(topLine);
-      selCard.appendChild(h("div", `font-size:12px;color:${C.sub};line-height:1.45;`,
-        "Spotify renames its CSS classes between releases. This checks whether the class names these fixes depend on still exist on this page."));
       selCard.appendChild(note("How to read the table",
         "Checked on " + health.route + " when the panel opened. OK = matched on its expected route; N/A here = wrong route, or the extension that owns it is not installed; NOT SEEN = expected here but not matched yet; STALE = matched on an earlier Spotify version, not on this one. " +
         "The list is stored locally with the Spotify version, so a stale row is a concrete bug report: the matching fix would silently do nothing."));
@@ -3687,7 +3764,6 @@
     body.appendChild(selSec);
 
     // ------------------------------------------------ author check (heuristic)
-    const aSec = section("Author check (heuristic)");
     const aCard = h("div", `display:flex;flex-direction:column;gap:10px;background:${C.card};border-radius:12px;padding:12px 14px;`);
     const aTop = h("div", "display:flex;align-items:center;gap:12px;justify-content:space-between;flex-wrap:wrap;");
     const aText = h("div", "display:flex;flex-direction:column;gap:3px;flex:1 1 340px;min-width:260px;");
@@ -3766,11 +3842,6 @@
           ["check", "result", "evidence"],
           ac.checks.map((c) => [c.label, c.result, c.evidence])
         ));
-        aCard.appendChild(h("div", `font-size:11px;color:${C.sub};line-height:1.45;`,
-          "Thresholds: callback pass < " + AUTHOR.callbackMsPerSec.pass + " ms/s, fail > " + AUTHOR.callbackMsPerSec.warn +
-          " ms/s; intervals pass <= " + AUTHOR.intervalsPerSec.pass + "/s, fail > " + AUTHOR.intervalsPerSec.warn +
-          "/s; any forced read > " + AUTHOR.forcedMs + " ms fails; any subtree observer on document/body/documentElement fails. " +
-          "One machine, one theme, synthetic scroll: treat this as a debugging aid, not a guarantee."));
         const aBtns = h("div", "display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;");
         aBtns.appendChild(btn("Copy JSON", () => copyText(JSON.stringify(ac, null, 2))));
         aBtns.appendChild(btn("Copy badge line", () => copyText("Perf Adviser check: " + ac.overall.toUpperCase() + " - " + ac.source + " - " + ac.at.slice(0, 10) + " (heuristic, one machine)")));
@@ -3779,9 +3850,7 @@
     } else {
       aCard.appendChild(h("div", `font-size:12px;color:${C.sub};`, "Timing-only results still work without Author mode; startup observers and intervals are invisible until it is on and Spotify is reloaded."));
     }
-    aSec.appendChild(aCard);
-    body.appendChild(aSec);
-
+    oBody.appendChild(aCard);
     buildBisectPanel(bBody, s);
 
     // footer

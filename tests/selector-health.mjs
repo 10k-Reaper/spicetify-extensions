@@ -53,8 +53,22 @@ const first = await page.evaluate(() => {
   return {
     version: h.version, source: h.source, migrated: h.migrated, route: h.route,
     byId: Object.fromEntries(h.rows.map((r) => [r.id, r.status])),
+    topbarSel: (h.rows.find((r) => r.id === "header-topbar") || {}).sel,
     stored: JSON.parse(localStorage.getItem("perf-adviser:selector-health")),
   };
+});
+
+// Current Spotify builds mount .Root__globalNav instead of the legacy
+// .main-topBar-background. The row must resolve to the name that exists.
+const renamed = await page.evaluate(() => {
+  const legacy = document.querySelector(".main-topBar-background");
+  if (legacy) legacy.remove();
+  const current = document.createElement("div");
+  current.className = "Root__globalNav";
+  document.body.appendChild(current);
+  const h = window.__perfAdviser.selectorHealth();
+  const row = h.rows.find((r) => r.id === "header-topbar");
+  return { status: row.status, sel: row.sel };
 });
 
 // Pretend the previous run was on an older Spotify build and that Home was seen
@@ -81,12 +95,16 @@ const third = await page.evaluate(() => {
   return { route: h.route, byId: Object.fromEntries(h.rows.map((r) => [r.id, r.status])) };
 });
 
-console.log(JSON.stringify({ first, second, third }, null, 2));
+console.log(JSON.stringify({ first, renamed, second, third }, null, 2));
 await browser.close();
 server.close();
 
 const ok =
   first.byId["home-page"] === "OK" &&
+  first.byId["header-topbar"] === "OK" &&
+  first.topbarSel === ".main-topBar-background" &&
+  renamed.status === "OK" &&
+  renamed.sel === ".Root__globalNav" &&
   first.byId["header-search"] === "N/A here" &&
   first.byId["header-tracklist"] === "N/A here" &&
   first.source === "Spicetify.Platform.version" &&

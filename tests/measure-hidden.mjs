@@ -73,7 +73,7 @@ const after = await page.evaluate(() => {
   const text = root ? root.textContent : "";
   return {
     root: !!root,
-    unmeasured: /Nothing has been measured yet/.test(text),
+    unmeasured: /Press Measure to run a 5-second scroll test/.test(text),
     hasMeasure: [...(root ? root.querySelectorAll("button") : [])].some((b) => b.textContent.trim() === "Measure"),
     notes: window.__notes.slice(),
     displays: window.__displayCount || 0,
