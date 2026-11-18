@@ -61,8 +61,9 @@ const firstOpen = await page.evaluate(() => ({
   displays: window.__displayCount || 0,
   unmeasured: document.querySelector(".perf-adviser-root").textContent.includes("Press Measure to run a 5-second scroll test"),
 }));
-// Each tab keeps its own offset. Park Other at 300, then switch away.
-await clickText("Other");
+// Each tab keeps its own offset. Park the Advanced tab (view id "other") at
+// 300, then switch away.
+await clickText("Advanced");
 await new Promise((r) => setTimeout(r, 120));
 await page.evaluate(() => { document.querySelector(".perf-adviser-root").scrollTop = 300; });
 await new Promise((r) => setTimeout(r, 120));
@@ -87,7 +88,7 @@ const backToReport = await page.evaluate(() => ({
   view: document.querySelector(".perf-adviser-root").dataset.view,
   displays: window.__displayCount || 0,
 }));
-await clickText("Other");
+await clickText("Advanced");
 await new Promise((r) => setTimeout(r, 120));
 const backToOther = await page.evaluate(() => ({
   scroll: document.querySelector(".perf-adviser-root").scrollTop,

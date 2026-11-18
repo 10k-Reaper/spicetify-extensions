@@ -1,4 +1,4 @@
-﻿// perf-adviser.js - in-app performance adviser for this Spotify + Spicetify setup.
+﻿// perf-adviser.js - performance adviser for Spicetify.
 //
 // What it does
 //   - injects two measured, individually switchable fixes (the recommended set):
@@ -11,7 +11,7 @@
 //     fallback for people who want to keep the effect.
 //   - one opt-in override for endless animations whose element is offscreen:
 //     they are paused through an IntersectionObserver and resume as soon as
-//     they scroll into view. Measured +6.4 fps on Home here; visible motion is
+//     they scroll into view. Measured +7.4 fps on Home here; visible motion is
 //     never paused.
 //   - one optional cosmetic bundle (marketplace card border, active-button
 //     colour, 72 px player bar) - not a performance fix, off by default
@@ -27,10 +27,10 @@
 //     extensions/snippets/theme, every CSS source (rule counts, :has(), blur,
 //     infinite animations), running animations and their source, header blur,
 //     page zoom and CSS-editor leftovers. No name has to be on a list.
-//   - runs the same scroll FPS test used by the offline harness, inside Spotify
-//   - includes the profiler that used to live in spx-perf.js: start recording,
-//     scroll, stop, and see cost attributed by extension/script; the biggest
-//     non-Spotify sources then become findings automatically
+//   - runs a scroll FPS test inside Spotify
+//   - includes a profiler: start recording, scroll, stop, and see cost
+//     attributed by extension/script; the biggest non-Spotify sources then
+//     become findings automatically
 //
 // What it never does
 //   - it does not disable, uninstall or update any extension/snippet/theme
@@ -55,7 +55,7 @@
   "use strict";
   if (window.__perfAdviser) return;
 
-  const VERSION = "1.0.1";
+  const VERSION = "1.1.0";
   const STATE_KEY = "perf-adviser:state";
   const FIX_ID = "perf-adviser-fixes";
   const SCROLL_CLASS = "perf-adviser-scrolling";
@@ -64,9 +64,9 @@
   let navSubscribed = false;
 
   // The panel uses Spotify's PopupModal, whose surface is translucent
-  // (rgba(...,.7) plus a backdrop blur in Lucid). While our panel is open we
+  // While the panel is open we
   // give both modal layers an opaque version of that same theme colour, so text
-  // stays readable over any page behind it. Scoped to our own modal only.
+  // stays readable over any page behind it.
   const PANEL_CSS = `
 .${PANEL_MODAL} {
   background-color: var(--perf-adviser-surface, #121212) !important;
@@ -131,8 +131,7 @@
     "}",
   ].join("\n");
 
-  // Cosmetic bundle that used to live in the CSS editor. Theme-specific, not a
-  // measured performance win, so it is off by default and never part of the
+  // Cosmetic bundle. Theme-specific, not a measured performance win, so it is off by default and never part of the
   // recommended preset.
   const THEME_CSS = [
     "/* Perf Adviser optional theme tweaks (cosmetic, not a performance fix). */",
@@ -169,13 +168,13 @@
   };
   function loadState() {
     let stored = {};
-    try { stored = JSON.parse(localStorage.getItem(STATE_KEY) || "{}") || {}; } catch (e) { stored = {}; }
+    try { stored = JSON.parse(localStorage.getItem(STATE_KEY) || "{}") || {}; } catch { stored = {}; }
     const s = {};
     for (const k of Object.keys(DEFAULTS)) s[k] = k in stored ? !!stored[k] : DEFAULTS[k];
     return s;
   }
   function saveState(s) {
-    try { localStorage.setItem(STATE_KEY, JSON.stringify(s)); } catch (e) { /* ignore */ }
+    try { localStorage.setItem(STATE_KEY, JSON.stringify(s)); } catch { /* ignore */ }
   }
   const state = loadState();
 
@@ -225,7 +224,7 @@
     };
     function sourceOf() {
       let stack = "";
-      try { stack = new Error().stack || ""; } catch (e) { return "(unknown)"; }
+      try { stack = new Error().stack || ""; } catch { return "(unknown)"; }
       for (const line of stack.split("\n").slice(1)) {
         if (/perf-adviser\.js|pa_/.test(line)) continue;
         const m = URL_RE.exec(line);
@@ -268,12 +267,12 @@
               args = Array.prototype.slice.call(arguments);
               args[0] = wrapTimed(fn, src, "interval");
             }
-          } catch (e) { /* ignore */ }
+          } catch { /* ignore */ }
           loadMs += performance.now() - t;
           registrations++;
           return origSetInterval.apply(window, args);
         };
-      } catch (e) { /* ignore */ }
+      } catch { /* ignore */ }
 
       try {
         const NativeMO = window.MutationObserver;
@@ -297,14 +296,14 @@
                 broad: !!opts.subtree && (target === document || target === document.body || target === document.documentElement),
                 attrNoFilter: !!opts.attributes && !opts.attributeFilter,
               });
-            } catch (e) { /* ignore */ }
+            } catch { /* ignore */ }
             loadMs += performance.now() - t;
             registrations++;
             return super.observe(target, options);
           }
         }
         window.MutationObserver = AuthorMO;
-      } catch (e) { /* ignore */ }
+      } catch { /* ignore */ }
 
       try {
         const origAdd = EventTarget.prototype.addEventListener;
@@ -317,14 +316,14 @@
               src = sourceOf();
               add(src, "listeners", { at: Date.now(), type, target: describeTarget(this), capture: !!(options && (options === true || options.capture)) });
               if (typeof listener === "function") wrapped = wrapTimed(listener, src, "listener:" + type);
-            } catch (e) { /* ignore */ }
+            } catch { /* ignore */ }
             loadMs += performance.now() - t;
             registrations++;
             return origAdd.call(this, type, wrapped, options);
           }
           return origAdd.call(this, type, listener, options);
         };
-      } catch (e) { /* ignore */ }
+      } catch { /* ignore */ }
     }
 
     return {
@@ -365,18 +364,13 @@
     el.textContent = blocks.join("\n");
     if (state.cssOff || !state.cardPlayFix) clearScrollClass();
   }
-  function clearInjectedFixes() {
-    const el = document.getElementById(FIX_ID);
-    if (el) el.remove();
-    clearScrollClass();
-  }
   applyInjectedFixes();
 
   // ------------------------------------------------- offscreen animations
   // Optional. An infinite CSS animation keeps costing style/layout work even
   // when its element is far outside the viewport, and keyframes that move
   // top/left/width cannot be composited at all. The ivLyrics background blobs
-  // sit 1700 px below Home and still measured ~10 fps of scroll headroom. This
+  // sit 1700 px below Home; pausing them measured +7.4 fps median. This
   // pauses just the animation while the element is offscreen; the element and
   // its look are untouched, and it resumes as soon as it scrolls into view.
   const OFFSCREEN_ID = "perf-adviser-offscreen";
@@ -391,16 +385,16 @@
   function offscreenCollect() {
     if (!state.offscreen || state.cssOff || !offscreen.io) return;
     let anims = [];
-    try { anims = document.getAnimations ? document.getAnimations() : []; } catch (e) { anims = []; }
+    try { anims = document.getAnimations ? document.getAnimations() : []; } catch { anims = []; }
     for (const a of anims) {
       let timing = null;
-      try { timing = a.effect && a.effect.getTiming(); } catch (e) { timing = null; }
+      try { timing = a.effect && a.effect.getTiming(); } catch { timing = null; }
       if (!timing || timing.iterations !== Infinity) continue;
       const t = a.effect.target;
       if (!t || !t.isConnected || offscreen.targets.has(t)) continue;
       if (offscreen.targets.size >= 500) break; // a runaway page must not grow this forever
       offscreen.targets.add(t);
-      try { offscreen.io.observe(t); } catch (e) { offscreen.targets.delete(t); }
+      try { offscreen.io.observe(t); } catch { offscreen.targets.delete(t); }
     }
   }
 
@@ -423,7 +417,7 @@
     try {
       const H = Spicetify.Platform && Spicetify.Platform.History;
       if (H && H.listen) H.listen(() => offscreenScheduleCollect(900));
-    } catch (e) { /* ignore */ }
+    } catch { /* ignore */ }
   }
 
   function offscreenEnable() {
@@ -443,8 +437,8 @@
     }
     offscreenCollect();
     offscreenScheduleCollect(1500); // late-mounting widgets on this view
-    // A second one-shot covers apps that mount after the first pass (e.g. a
-    // saved-on reload where the lyrics panel appears a few seconds late).
+    // A second one-shot covers widgets that mount after the first pass (e.g. the
+    // lyrics panel appearing a few seconds after a reload with the switch on).
     if (offscreen.late) clearTimeout(offscreen.late);
     offscreen.late = setTimeout(() => { offscreen.late = null; offscreenCollect(); }, 5000);
   }
@@ -452,9 +446,9 @@
   function offscreenDisable() {
     if (offscreen.timer) { clearTimeout(offscreen.timer); offscreen.timer = null; }
     if (offscreen.late) { clearTimeout(offscreen.late); offscreen.late = null; }
-    if (offscreen.io) { try { offscreen.io.disconnect(); } catch (e) { /* ignore */ } offscreen.io = null; }
+    if (offscreen.io) { try { offscreen.io.disconnect(); } catch { /* ignore */ } offscreen.io = null; }
     for (const el of offscreen.targets) {
-      try { el.classList.remove(OFFSCREEN_CLASS); } catch (e) { /* ignore */ }
+      try { el.classList.remove(OFFSCREEN_CLASS); } catch { /* ignore */ }
     }
     offscreen.targets.clear();
     if (offscreen.style) { offscreen.style.remove(); offscreen.style = null; }
@@ -468,9 +462,9 @@
   syncOffscreen();
 
   // ------------------------------------------------------- panel surface
-  // Spotify's PopupModal surface is translucent (rgba(...,.7) + a 32 px blur in
-  // Lucid). Reuse its own colour at full alpha so the panel matches the theme
-  // but stays readable over whatever page is behind it. Scoped to our modal.
+  // Spotify's PopupModal surface is translucent + a 32 px blur.
+  // Reuse its own colour at full alpha so the panel matches the theme
+  // but stays readable over whatever page is behind it.
   function ensurePanelStyle() {
     if (document.getElementById(PANEL_ID)) return;
     const el = document.createElement("style");
@@ -502,9 +496,9 @@
     let modal = null;
     for (const n of nodes) if (n.querySelector(".perf-adviser-root")) modal = n;
     if (!modal && panelRoot && panelRoot.isConnected) {
-      try { modal = panelRoot.closest(".GenericModal"); } catch (e) { modal = null; }
+      try { modal = panelRoot.closest(".GenericModal"); } catch { modal = null; }
     }
-    // PopupModal may mount a tick after display() returns; wait for our content.
+    // PopupModal may mount a tick after display() returns; waits for content.
     if (!modal) {
       if ((attempt || 0) < 10) setTimeout(() => skinModal((attempt || 0) + 1), 60);
       return;
@@ -605,13 +599,13 @@
   function forEachStyleRule(cb) {
     for (const sheet of [...document.styleSheets]) {
       let rules;
-      try { rules = sheet.cssRules; } catch (e) { continue; }
+      try { rules = sheet.cssRules; } catch { continue; }
       if (!rules) continue;
       const walk = (list) => {
         for (const rule of list) {
           if (rule.cssRules) walk(rule.cssRules);   // @media, @supports, nesting
           if (rule.selectorText) {
-            try { cb(rule); } catch (e) { /* ignore one bad rule */ }
+            try { cb(rule); } catch { /* ignore one bad rule */ }
           }
         }
       };
@@ -623,7 +617,7 @@
   function matchesAny(selector) {
     let n = 0;
     for (const part of splitTopLevel(selector)) {
-      try { n += document.querySelectorAll(part).length; } catch (e) { return 1; }
+      try { n += document.querySelectorAll(part).length; } catch { return 1; }
       if (n > 0) return n;
     }
     return n;
@@ -648,7 +642,7 @@
   // Every add/remove is guarded: a no-op classList call still queues an attribute
   // record in Chromium, and this function runs from the body observer's callback.
   // Unguarded writes made the observer re-trigger itself while a .track-peek
-  // existed, starving timers and rendering (see tests/peek-loop.mjs).
+  // existed, starving timers and rendering.
   function updatePeekMirrors(on) {
     if (!on) {
       for (const el of document.querySelectorAll("." + PEEK_WRAP)) {
@@ -749,7 +743,7 @@
       if (p.rule.selectorText !== p.sentinel) continue;
       if (filter && p.precond && !nodesTouch(filter, p.precond)) continue;
       if (matchesAny(p.original) > 0) {
-        try { p.rule.selectorText = p.original; changed = true; } catch (e) { /* ignore */ }
+        try { p.rule.selectorText = p.original; changed = true; } catch { /* ignore */ }
       }
     }
     if (changed) {
@@ -789,19 +783,19 @@
 
   function safeMatches(el, selector) {
     if (!selector) return false;
-    try { return el.matches(selector); } catch (e) { return true; }
+    try { return el.matches(selector); } catch { return true; }
   }
 
   function safeQuery(el, selector) {
     if (!selector) return false;
-    try { return !!el.querySelector(selector); } catch (e) { return true; }
+    try { return !!el.querySelector(selector); } catch { return true; }
   }
 
   // Parked rules that are currently restored because their target appeared.
   function liveParkedCount() {
     let n = 0;
     for (const p of runtime.parked) {
-      try { if (p.rule && p.rule.parentStyleSheet && p.rule.selectorText === p.original) n++; } catch (e) { /* ignore */ }
+      try { if (p.rule && p.rule.parentStyleSheet && p.rule.selectorText === p.original) n++; } catch { /* ignore */ }
     }
     return n;
   }
@@ -815,7 +809,7 @@
     const hasPeek = (node) => {
       if (!node || node.nodeType !== 1) return false;
       if (node.classList && node.classList.contains("track-peek")) return true;
-      try { return !!node.querySelector(".track-peek"); } catch (e) { return false; }
+      try { return !!node.querySelector(".track-peek"); } catch { return false; }
     };
     for (const rec of records) {
       if (rec.type === "attributes") {
@@ -889,14 +883,14 @@
     // goes away, restore them when it comes back.
     for (const p of runtime.parked) {
       let sel = "";
-      try { sel = p.rule.selectorText; } catch (e) { continue; }
+      try { sel = p.rule.selectorText; } catch { continue; }
       if (sel === p.sentinel) {
         if (VOLATILE_STATE_RE.test(p.original) || matchesAny(p.original) > 0) {
-          try { p.rule.selectorText = p.original; } catch (e) { /* ignore */ }
+          try { p.rule.selectorText = p.original; } catch { /* ignore */ }
         }
       } else if (sel === p.original) {
         if (matchesAny(p.original) === 0) {
-          try { p.rule.selectorText = p.sentinel; } catch (e) { /* ignore */ }
+          try { p.rule.selectorText = p.sentinel; } catch { /* ignore */ }
         }
       }
     }
@@ -913,12 +907,12 @@
       if (matchesAny(sel) > 0) { live++; return; }
       const original = sel;
       const sentinel = PARK_PREFIX + (++runtime.seq);
-      try { rule.selectorText = sentinel; } catch (e) { return; }
+      try { rule.selectorText = sentinel; } catch { return; }
       runtime.parked.push({ rule, original, sentinel, precond: preconditionsFor(original).join(",") });
     });
 
     runtime.live = live + runtime.parked.filter((p) => {
-      try { return p.rule.selectorText === p.original; } catch (e) { return false; }
+      try { return p.rule.selectorText === p.original; } catch { return false; }
     }).length;
     runtime.mirrored = document.querySelectorAll("." + PEEK_ANCHOR + ", ." + PEEK_WRAP).length;
     rebuildPreconditions();
@@ -930,27 +924,27 @@
     try {
       runtime.headObserver = new MutationObserver(() => scheduleScan(500));
       runtime.headObserver.observe(document.head || document.documentElement, { childList: true, subtree: true, characterData: true });
-    } catch (e) { /* ignore */ }
+    } catch { /* ignore */ }
     try {
       runtime.bodyObserver = new MutationObserver(onPatchMutations);
       runtime.bodyObserver.observe(document.body, { childList: true, subtree: true, attributes: true });
-    } catch (e) { /* ignore */ }
+    } catch { /* ignore */ }
     try {
       document.addEventListener("focusin", () => scheduleRevive(200), true);
       window.addEventListener("popstate", () => scheduleScan(600));
-    } catch (e) { /* ignore */ }
+    } catch { /* ignore */ }
     try {
       if (Spicetify.Platform && Spicetify.Platform.History && Spicetify.Platform.History.listen) {
         Spicetify.Platform.History.listen(() => scheduleScan(700));
       }
-    } catch (e) { /* ignore */ }
+    } catch { /* ignore */ }
   }
 
   function syncRuntimePatches() {
     if (!patchesActive()) {
       if (runtime.reparkTimer) { clearTimeout(runtime.reparkTimer); runtime.reparkTimer = null; }
       for (const p of runtime.parked) {
-        try { p.rule.selectorText = p.original; } catch (e) { /* ignore */ }
+        try { p.rule.selectorText = p.original; } catch { /* ignore */ }
       }
       runtime.parked = [];
       runtime.live = 0;
@@ -1013,7 +1007,7 @@
     document.addEventListener("scroll", onScrollSignal, { capture: true, passive: true });
     document.addEventListener("wheel", onScrollSignal, { capture: true, passive: true });
     document.addEventListener("touchmove", onScrollSignal, { capture: true, passive: true });
-  } catch (e) { /* ignore */ }
+  } catch { /* ignore */ }
 
   // ---------------------------------------------------------------- helpers
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1023,18 +1017,18 @@
     return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
   };
   const route = () => {
-    try { return Spicetify.Platform.History.location.pathname || "/"; } catch (e) { return location.hash || "/"; }
+    try { return Spicetify.Platform.History.location.pathname || "/"; } catch { return location.hash || "/"; }
   };
   function notify(msg, isError) {
-    try { Spicetify.showNotification(msg, !!isError, 4000); } catch (e) { /* ignore */ }
+    try { Spicetify.showNotification(msg, !!isError, 4000); } catch { /* ignore */ }
   }
   // Reloads the Spotify window, which re-runs every extension from disk. This
   // is the only reload that does not need the Spicetify CLI; it cannot pick up
   // config changes made by `spicetify apply`.
   function reloadSpotify() {
-    try { Spicetify.PopupModal.hide(); } catch (e) { /* ignore */ }
+    try { Spicetify.PopupModal.hide(); } catch { /* ignore */ }
     setTimeout(() => {
-      try { location.reload(); } catch (e) { /* ignore */ }
+      try { location.reload(); } catch { /* ignore */ }
     }, 150);
   }
   function h(tag, css, text) {
@@ -1069,16 +1063,14 @@
   }
 
   // ---------------------------------------------------------------- profiler
-  // Compact port of spx-perf.js (that extension is no longer installed). All
-  // wrappers are installed only while a recording runs, so profiling costs
-  // nothing when you are not using it.
+  // Compact profiler. All wrappers are installed only while a recording runs,
+  // so profiling costs nothing when you are not using it.
   const prof = (() => {
     const CORE = "spotify-core";
     const UNKNOWN = "(unknown)";
     const ANON = "(anonymous/eval)";
     const CORE_RE = /^(vendor[~-])?xpui[\w.~-]*\.js$/i;
     const INFRA = new Set(["spicetifyWrapper.js", "perf-adviser.js"]);
-    const HOT = new Set(["scroll", "wheel", "mousewheel", "mousemove", "mouseover", "pointermove", "pointerover", "touchmove", "touchstart", "resize"]);
     const FORCED_MS = 2;
 
     const orig = {
@@ -1090,7 +1082,6 @@
       add: EventTarget.prototype.addEventListener,
       remove: EventTarget.prototype.removeEventListener,
     };
-    const later = (fn, ms) => orig.setTimeout.call(window, fn, ms);
 
     let recording = false;
     let startedAt = 0;
@@ -1141,7 +1132,7 @@
     // First frame that is not Spotify core, not Spicetify's wrapper, not us.
     function attribute() {
       let stack = "";
-      try { stack = new Error().stack || ""; } catch (e) { return UNKNOWN; }
+      try { stack = new Error().stack || ""; } catch { return UNKNOWN; }
       const lines = stack.split("\n").slice(1);
       let sawCore = false, sawAnon = false;
       for (const line of lines) {
@@ -1197,7 +1188,7 @@
               },
             });
             undo.push(() => Object.defineProperty(proto, name, desc));
-          } catch (e) { /* ignore */ }
+          } catch { /* ignore */ }
         }
       }
       for (const name of ["getBoundingClientRect", "getClientRects"]) {
@@ -1216,7 +1207,7 @@
             },
           });
           undo.push(() => Object.defineProperty(Element.prototype, name, desc));
-        } catch (e) { /* ignore */ }
+        } catch { /* ignore */ }
       }
     }
 
@@ -1241,7 +1232,7 @@
             inv(src, "interval");
             if (src !== CORE) args[0] = wrapCb(fn, src, "interval");
           }
-        } catch (e) { /* ignore */ }
+        } catch { /* ignore */ }
         return orig.setInterval.apply(window, args);
       };
       undo.push(() => { window.setInterval = prev.setInterval; });
@@ -1253,7 +1244,7 @@
             const src = activeSource || attribute();
             if (src !== CORE) args[0] = wrapCb(fn, src, "timeout");
           }
-        } catch (e) { /* ignore */ }
+        } catch { /* ignore */ }
         return orig.setTimeout.apply(window, args);
       };
       undo.push(() => { window.setTimeout = prev.setTimeout; });
@@ -1264,7 +1255,7 @@
             const src = activeSource || attribute();
             if (src !== CORE) fn = wrapCb(fn, src, "raf");
           }
-        } catch (e) { /* ignore */ }
+        } catch { /* ignore */ }
         return orig.raf.call(window, fn);
       };
       undo.push(() => { window.requestAnimationFrame = prev.raf; });
@@ -1279,7 +1270,7 @@
               return orig.add.call(this, type, w, options);
             }
           }
-        } catch (e) { /* fall through */ }
+        } catch { /* fall through */ }
         return orig.add.call(this, type, listener, options);
       };
       undo.push(() => { EventTarget.prototype.addEventListener = prev.add; });
@@ -1288,7 +1279,7 @@
       class PaMO extends orig.MO {
         constructor(cb) {
           let src = UNKNOWN;
-          try { src = activeSource || attribute(); } catch (e) { /* ignore */ }
+          try { src = activeSource || attribute(); } catch { /* ignore */ }
           const wrapped = function (records, obs) {
             if (!recording || src === CORE) return cb.call(obs, records, obs);
             const prevSrc = activeSource;
@@ -1307,7 +1298,7 @@
                 (target === document.body || target === document || target === document.documentElement)) {
               inv(this.__paSrc, "broadObserver");
             }
-          } catch (e) { /* ignore */ }
+          } catch { /* ignore */ }
           return super.observe(target, options);
         }
       }
@@ -1349,7 +1340,7 @@
           o.observe({ type: "longtask" });
           perfObservers.push(o);
         }
-      } catch (e) { /* unsupported */ }
+      } catch { /* unsupported */ }
     }
 
     function fpsTick() {
@@ -1419,9 +1410,9 @@
     function stop() {
       if (!recording) return lastReport;
       recording = false;
-      for (const fn of undo.reverse()) { try { fn(); } catch (e) { /* ignore */ } }
+      for (const fn of undo.reverse()) { try { fn(); } catch { /* ignore */ } }
       undo = [];
-      for (const o of perfObservers) { try { o.disconnect(); } catch (e) { /* ignore */ } }
+      for (const o of perfObservers) { try { o.disconnect(); } catch { /* ignore */ } }
       perfObservers = [];
       lastReport = build();
       return lastReport;
@@ -1603,15 +1594,15 @@
         });
         obs.observe({ type: mode });
         running = true;
-      } catch (e) {
-        try { obs.disconnect(); } catch (e2) { /* ignore */ }
+      } catch {
+        try { obs.disconnect(); } catch { /* ignore */ }
         obs = null;
         running = false;
       }
     }
 
     function stop() {
-      if (obs) { try { obs.disconnect(); } catch (e) { /* ignore */ } }
+      if (obs) { try { obs.disconnect(); } catch { /* ignore */ } }
       obs = null;
       running = false;
       finalizeNav(true);
@@ -1667,7 +1658,7 @@
   })();
   lag.sync();
 
-  // Route changes are the only navigation signal; no timer and no polling. The
+  // Route changes are the only navigation signal. The
   // listener is installed once and does nothing while navTiming is off. On a
   // real client Spicetify.Platform.History.listen can appear a moment after
   // extensions start, and a subscription made too early silently sees nothing,
@@ -1681,7 +1672,7 @@
       });
       navSubscribed = true;
       return true;
-    } catch (e) { return false; }
+    } catch { return false; }
   }
   if (!subscribeNav()) {
     let navTries = 0;
@@ -1718,10 +1709,10 @@
           const req = tx.objectStore("settings").get(key);
           req.onsuccess = () => resolve(req.result);
           req.onerror = () => resolve(null);
-        } catch (e) { resolve(null); }
+        } catch { resolve(null); }
       });
       const parseList = (row) => {
-        try { return JSON.parse((row && row.value) || "[]"); } catch (e) { return []; }
+        try { return JSON.parse((row && row.value) || "[]"); } catch { return []; }
       };
       const [extRow, snipRow, themeRow] = await Promise.all([
         read("marketplace:installed-extensions"),
@@ -1735,7 +1726,7 @@
           const row = await read(key);
           const v = JSON.parse((row && row.value) || "{}");
           name = (v.manifest && v.manifest.name) || v.title || name;
-        } catch (e) { /* keep tail */ }
+        } catch { /* keep tail */ }
         return { key: tail, name };
       };
       const extensions = await Promise.all(parseList(extRow).map(describe));
@@ -1745,10 +1736,10 @@
         theme = await describe(String(themeRow.value));
       }
       return { extensions, snippets, theme };
-    } catch (e) {
+    } catch {
       return null;
     } finally {
-      try { if (db) db.close(); } catch (e) { /* ignore */ }
+      try { if (db) db.close(); } catch { /* ignore */ }
     }
   }
 
@@ -1756,7 +1747,7 @@
   // The fixes target Spotify class names that can be renamed in an update. This
   // registry makes a silent breakage visible: each selector is checked on the
   // route where it should exist, and last-seen evidence is kept with the Spotify
-  // version. Runs on panel open and once after a route change, never on a timer.
+  // version. Runs on panel open and once after a route change.
   const SELECTOR_STORE = "perf-adviser:selector-health";
   const TRACKLIST_ROUTES = ["/playlist/*", "/album/*", "/artist/*", "/collection/tracks"];
   const SELECTORS = [
@@ -1787,7 +1778,7 @@
     try {
       const v = Spicetify.Platform && Spicetify.Platform.version;
       if (v) { version = String(v); source = "Spicetify.Platform.version"; }
-    } catch (e) { /* ignore */ }
+    } catch { /* ignore */ }
     if (!version) {
       const m = /Spotify\/([\d.]+)/.exec(navigator.userAgent || "");
       if (m) { version = m[1]; source = "navigator.userAgent"; }
@@ -1802,7 +1793,7 @@
         if (!v.seen || typeof v.seen !== "object") v.seen = {};
         return v;
       }
-    } catch (e) { /* ignore */ }
+    } catch { /* ignore */ }
     return { spotifyVersion: null, seen: {} };
   }
 
@@ -1827,10 +1818,10 @@
       let present = false;
       let matched = "";
       if (def.kind === "cssvar") {
-        try { present = !!getComputedStyle(document.documentElement).getPropertyValue(sels[0]).trim(); } catch (e) { present = false; }
+        try { present = !!getComputedStyle(document.documentElement).getPropertyValue(sels[0]).trim(); } catch { present = false; }
       } else {
         for (const sel of sels) {
-          try { if (document.querySelector(sel)) { present = true; matched = sel; break; } } catch (e) { /* ignore */ }
+          try { if (document.querySelector(sel)) { present = true; matched = sel; break; } } catch { /* ignore */ }
         }
       }
       let status;
@@ -1854,7 +1845,7 @@
     stored.versionSource = ver.source;
     stored.checkedAt = new Date().toISOString();
     stored.lastRoute = routeNow;
-    try { localStorage.setItem(SELECTOR_STORE, JSON.stringify(stored)); } catch (e) { /* ignore */ }
+    try { localStorage.setItem(SELECTOR_STORE, JSON.stringify(stored)); } catch { /* ignore */ }
     return {
       version: ver.version,
       source: ver.source,
@@ -1866,15 +1857,13 @@
   }
 
   // One-shot after a route change, after the new view has had time to mount.
-  // This is not a polling timer: it schedules once per navigation and only when
-  // a navigation happened.
   try {
     if (Spicetify.Platform && Spicetify.Platform.History && Spicetify.Platform.History.listen) {
       Spicetify.Platform.History.listen(() => {
-        setTimeout(() => { try { evaluateSelectorHealth(); } catch (e) { /* ignore */ } }, 900);
+        setTimeout(() => { try { evaluateSelectorHealth(); } catch { /* ignore */ } }, 900);
       });
     }
-  } catch (e) { /* ignore */ }
+  } catch { /* ignore */ }
 
   function headerBlurOffenders() {
     const out = [];
@@ -1892,26 +1881,27 @@
     try {
       level = await Spicetify.Platform.ZoomAPI.getZoomLevel();
       if (typeof level !== "number") level = null;
-    } catch (e) { level = null; }
+    } catch { level = null; }
     return { dpr: window.devicePixelRatio, level };
   }
 
-  // How much CSS is still parked in the CSS editor extension.
+  // Characters of CSS stored by the CSS Editor extension, if present. Leftover
+  // rules there can keep affecting the page after other fixes are in place.
   function cssEditorChars() {
     let raw = null;
-    try { raw = localStorage.getItem("css-editor.css"); } catch (e) { return null; }
+    try { raw = localStorage.getItem("css-editor.css"); } catch { return null; }
     if (raw == null) return 0;
     try {
       const v = JSON.parse(raw);
       if (typeof v === "string") return v.length;
       if (v && typeof v.value === "string") return v.value.length;
-    } catch (e) { /* not JSON */ }
+    } catch { /* not JSON */ }
     return String(raw).length;
   }
 
   // The rotation can be added by a snippet, the theme or an extension. The
-  // animation name stays readable even when our opt-in CSS has paused it, so it
-  // identifies the source, not our fix.
+  // animation name stays readable even when opt-in CSS has paused it, so it
+  // identifies the source.
   function coverAnimationName() {
     const el = document.querySelector(".cover-art");
     if (!el) return "";
@@ -1951,7 +1941,7 @@
       if (sheet && sheet.cssRules) {
         return [{ kind: "theme", name: "Theme user.css", code: [...sheet.cssRules].map((r) => r.cssText).join("\n") }];
       }
-    } catch (e) { /* ignore */ }
+    } catch { /* ignore */ }
     return [{ kind: "theme", name: "Theme user.css (not readable)", code: "" }];
   }
 
@@ -2004,20 +1994,20 @@
     return null;
   }
 
-  // Infinite animations that are actually running (or paused by our override).
+  // Infinite animations that are actually running (or paused by the override).
   function infiniteAnimations() {
     let list = [];
-    try { list = document.getAnimations ? document.getAnimations() : []; } catch (e) { list = []; }
+    try { list = document.getAnimations ? document.getAnimations() : []; } catch { list = []; }
     const out = [];
     const seen = new Set();
     for (const a of list) {
       let timing = null;
-      try { timing = (a.effect && a.effect.getTiming()) || null; } catch (e) { timing = null; }
+      try { timing = (a.effect && a.effect.getTiming()) || null; } catch { timing = null; }
       if (!timing || timing.iterations !== Infinity) continue;
       const t = a.effect && a.effect.target;
       if (!t || t.id === FIX_ID) continue;
       let nm = a.animationName || "";
-      if (!nm) { try { nm = getComputedStyle(t).animationName || ""; } catch (e) { nm = ""; } }
+      if (!nm) { try { nm = getComputedStyle(t).animationName || ""; } catch { nm = ""; } }
       const cls = (t.className && String(t.className).trim().split(/\s+/).slice(0, 2).join(".")) || t.tagName.toLowerCase();
       const key = nm + "@" + cls;
       if (seen.has(key)) continue;
@@ -2086,7 +2076,7 @@
     try {
       obs = new PerformanceObserver((list) => list.getEntries().forEach((e) => longTasks.push(e.duration)));
       obs.observe({ entryTypes: ["longtask"] });
-    } catch (e) { obs = null; }
+    } catch { obs = null; }
 
     const frames = [];
     const start = performance.now();
@@ -2290,8 +2280,7 @@
     }
   }
 
-  // Thresholds are deliberately explicit so the README can quote the same
-  // numbers. They are calibrated from measured extensions on one machine; see
+  // Thresholds are explicit constants. They are calibrated from measured extensions on one machine; see
   // docs/MEASUREMENTS.md. They are heuristics, not a certification.
   const AUTHOR = {
     forcedMs: 2,
@@ -2322,13 +2311,13 @@
       if (!Array.isArray(v.disabled)) v.disabled = [];
       v.noiseFloor = +v.noiseFloor || 0;
       return v;
-    } catch (e) { return null; }
+    } catch { return null; }
   }
   function saveBisect() {
     try {
       if (bisect) localStorage.setItem(BISECT_KEY, JSON.stringify(bisect));
       else localStorage.removeItem(BISECT_KEY);
-    } catch (e) { /* ignore */ }
+    } catch { /* ignore */ }
   }
   function resetBisect() { bisect = null; saveBisect(); clearBisectMarks(); }
 
@@ -2362,7 +2351,7 @@
       try {
         const list = Spicetify.Config && Spicetify.Config.extensions;
         if (Array.isArray(list)) for (const f of list) add(String(f).replace(/\.(js|mjs)$/i, ""));
-      } catch (e) { /* ignore */ }
+      } catch { /* ignore */ }
     }
     return out.sort((a, b) => a.localeCompare(b));
   }
@@ -2391,7 +2380,7 @@
     try {
       const apps = Spicetify.Config && Spicetify.Config.custom_apps;
       if (Array.isArray(apps) && apps.some((a) => /marketplace/i.test(String(a)))) return true;
-    } catch (e) { /* ignore */ }
+    } catch { /* ignore */ }
     if (lastMarket) return true;
     return !!document.querySelector(".marketplace-tabBar-headerItemLink");
   }
@@ -2416,7 +2405,7 @@
   }
 
   // One subscription, installed the first time a round is opened, so the marks
-  // do not survive a navigation away from Marketplace. No polling.
+  // do not survive a navigation away from Marketplace.
   function ensureBisectNavCleanup() {
     if (bisectNavHooked) return;
     bisectNavHooked = true;
@@ -2425,7 +2414,7 @@
       if (H && H.listen) H.listen(() => {
         if (!/^\/marketplace(\/|$)/.test(route())) clearBisectMarks();
       });
-    } catch (e) { /* ignore */ }
+    } catch { /* ignore */ }
   }
 
   function cardTitle(card) {
@@ -2442,8 +2431,7 @@
 
   // Marketplace keeps a disabled extension on the Extensions tab with an
   // Install button, and removes it from Installed. An enable round therefore
-  // has to look in both places; the old code only searched Installed and left
-  // the cards it promised to outline unmarked.
+  // has to look in both places.
   async function openBisectTargets(namesArg) {
     const names = (Array.isArray(namesArg) && namesArg.length
       ? namesArg
@@ -2454,8 +2442,8 @@
     if (!names.length) return Object.assign({}, empty, { reason: "no-candidates" });
     if (!marketplaceInstalled()) return Object.assign({}, empty, { reason: "no-marketplace" });
     ensureBisectNavCleanup();
-    try { Spicetify.PopupModal.hide(); } catch (e) { /* ignore */ }
-    try { Spicetify.Platform.History.push("/marketplace"); } catch (e) {
+    try { Spicetify.PopupModal.hide(); } catch { /* ignore */ }
+    try { Spicetify.Platform.History.push("/marketplace"); } catch {
       return Object.assign({}, empty, { reason: "no-history" });
     }
     try {
@@ -2722,7 +2710,7 @@
     bisectBusy = true;
     busy = true;
     clearBisectMarks();
-    savePanelScroll(); try { Spicetify.PopupModal.hide(); } catch (e) { /* ignore */ }
+    savePanelScroll(); try { Spicetify.PopupModal.hide(); } catch { /* ignore */ }
     notify("Perf Adviser: bisect measurement - " + BISECT.runs + " x " + (BISECT.runMs / 1000) + " s, the page will scroll");
     await sleep(600);
     let bm = null;
@@ -2901,7 +2889,7 @@
     if (lag.nav.normRoute(route()) !== "/") { notify("Perf Adviser: open Home before the author check", true); return; }
     if (!source) { notify("Perf Adviser: pick a source first", true); return; }
     busy = true;
-    savePanelScroll(); try { Spicetify.PopupModal.hide(); } catch (e) { /* ignore */ }
+    savePanelScroll(); try { Spicetify.PopupModal.hide(); } catch { /* ignore */ }
     notify("Perf Adviser: author check - scrolling Home for " + (AUTHOR.scrollMs / 1000) + " s, then " + (AUTHOR.idleMs / 1000) + " s idle");
     await sleep(500);
     author.resetTimings();
@@ -3054,7 +3042,7 @@
           body: ms + " ms in " + t.calls + " callback(s) over " + (p.recordedMs / 1000).toFixed(1) + " s of recording" +
             (share ? " (~" + share + "% of the window)" : "") + ", longest " + Math.round(t.maxMs) + " ms" +
             (t.forcedCount ? "; includes " + Math.round(t.forcedMs) + " ms of forced layout reads" : "") + ". This is measured, not a guess.",
-          action: "If you do not need it, disable it in Marketplace and record again to compare.",
+          action: "If you do not need it, disable it in Marketplace or uninstall it and record again to compare.",
         });
       }
     }
@@ -3070,7 +3058,7 @@
         body: cssTop.rules + " rules, " + cssTop.has + " :has() selectors, " + cssTop.blur + " blur rule(s), " +
           Math.round(cssTop.chars / 1024) + " KB of CSS, " + cssTop.infinite + " infinite animation(s). " +
           "These are counts, not a measured fps cost, but they make style recalc more expensive on every scroll.",
-        action: "If you do not need it, disable it and press 'Measure again' to compare on your own machine.",
+        action: "If you do not need it, disable it in Marketplace and press 'Measure again' to compare on your own machine.",
       });
     }
 
@@ -3088,7 +3076,7 @@
     const ta = h("textarea", "position:fixed;left:-9999px;top:0;", text);
     document.body.appendChild(ta);
     ta.select();
-    try { document.execCommand("copy"); notify("Perf Adviser: report copied"); } catch (e) { notify("Perf Adviser: could not copy", true); }
+    try { document.execCommand("copy"); notify("Perf Adviser: report copied"); } catch { notify("Perf Adviser: could not copy", true); }
     ta.remove();
   }
 
@@ -3172,7 +3160,7 @@
     return lines.join("\n");
   }
 
-  function showPanel() {
+  function renderPanel() {
     if (!last) return;
     const { scan: s, bench: b } = last;
     const p = last.prof || null;
@@ -3188,10 +3176,9 @@
     // header
     const head = h("div", "display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;");
     const titleWrap = h("div", "display:flex;flex-direction:column;gap:2px;");
-    titleWrap.appendChild(h("div", `font-size:12px;color:${C.sub};`, "v" + VERSION + " - " + (b ? b.route : s.route) + " - nothing is disabled automatically"));
+    titleWrap.appendChild(h("div", `font-size:12px;color:${C.sub};`, "v" + VERSION + " - " + (b ? b.route : s.route)));
     head.appendChild(titleWrap);
     const headRight = h("div", "display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;");
-    headRight.appendChild(h("span", `font-size:11px;color:${C.sub};`, "no network"));
     const reloadBtn = btn("Reload Spotify", reloadSpotify);
     reloadBtn.style.fontSize = "11px";
     reloadBtn.style.padding = "4px 9px";
@@ -3213,8 +3200,8 @@
       return el;
     };
     tabBar.appendChild(tabBtn("Report", "report"));
-    tabBar.appendChild(tabBtn("Other", "other"));
     tabBar.appendChild(tabBtn("Bisect", "bisect"));
+    tabBar.appendChild(tabBtn("Advanced", "other"));
     root.appendChild(tabBar);
 
     const body = h("div", "display:flex;flex-direction:column;gap:16px;");
@@ -3255,8 +3242,7 @@
     score.appendChild(scoreBtns);
     body.appendChild(score);
 
-    // findings. The old "What to change" label is gone; the line that used to
-    // sit under the FPS card now starts this block, at the same height.
+    // findings
     const findings = h("div", "display:flex;flex-direction:column;gap:8px;");
     if (!b) {
       findings.appendChild(h("div", `font-size:12px;color:${C.sub};line-height:1.45;`,
@@ -3302,7 +3288,7 @@
     // Generic CSS inventory: every snippet, the theme and extension <style>
     // blocks, ranked by expensive signals. Counts only - the profiler gives
     // measured attribution, so nothing here depends on a name being known.
-    const cssSec = section("Installed CSS (signals)");
+    const cssSec = section("(signals)");
     const cssCard = h("div", `display:flex;flex-direction:column;gap:8px;background:${C.card};border-radius:12px;padding:12px 14px;`);
     const cssRows = (s.css || []).slice(0, 5).map((x) => [
       x.name, String(x.rules), String(x.has), String(x.blur), String(x.infinite), Math.round(x.chars / 1024) + " KB",
@@ -3310,7 +3296,7 @@
     if (cssRows.length) {
       cssCard.appendChild(miniTable(["source", "rules", ":has()", "blur", "infinite", "size"], cssRows));
       cssCard.appendChild(h("div", `font-size:11px;color:${C.sub};line-height:1.4;`,
-        "Counts are signals for style-recalc risk, not measured fps. Record a profile on the slow page to attribute real main-thread time."));
+        "Counts are signals for style-recalc risk. Record a profile on the slow page to attribute real main-thread time."));
     } else {
       cssCard.appendChild(h("div", `font-size:12px;color:${C.sub};`, "No snippet, theme or extension CSS found."));
     }
@@ -3329,7 +3315,7 @@
     killText.appendChild(h("div", `font-size:12px;color:${C.sub};line-height:1.45;`,
       s.cssOff
         ? "Every fix and runtime patch is paused right now. Your individual choices are remembered; Resume puts back exactly what was on."
-        : "Turns off every fix and runtime patch at once, without forgetting which ones you chose. Handy for comparing with unmodified Spotify."));
+        : "Turns off every fix and runtime patch at once, without forgetting which ones you chose. Useful for comparing fixes fps gain."));
     killRow.appendChild(killText);
     if (s.cssOff) {
       killRow.appendChild(btn("Resume all fixes", () => {
@@ -3394,7 +3380,7 @@
     const presetText = h("div", "display:flex;flex-direction:column;gap:3px;flex:1 1 320px;min-width:240px;");
     presetText.appendChild(h("div", `font-size:13px;font-weight:600;color:${C.text};`, "Recommended preset"));
     presetText.appendChild(h("div", `font-size:12px;color:${C.sub};line-height:1.45;`,
-      "The two fixes with a clear measured win: the top-bar blur and the Home card button. If you only do one thing, do this. The rotating-cover switch stays off because a snippet or theme usually adds that spin; removing the source is better than overriding it."));
+      "The two fixes with clear boosts: the Sticky Header BLur and the Home card button. If you only enable a few things, enable these."));
     presetRow.appendChild(presetText);
     if (recOn) {
       presetRow.appendChild(pill("applied", C.green));
@@ -3422,7 +3408,7 @@
       detail: s.headerFix
         ? "The blur behind the top bar is off. Scrolling under it no longer forces Spotify to recompute that blur."
         : "Spotify blurs whatever scrolls under the top bar. Removing that blur measured about +6 fps on top of the Home card fix.",
-      technical: "Sets --header-filters:none and gives five Spotify header surfaces an opaque theme colour (top bar, search category bar, Home filter chips, track-list header and stuck header). Measured +5.8 fps on top of the Home card fix; +1.5 fps within noise on its own. Reversible CSS only, no Spotify code is patched.",
+      technical: "Sets --header-filters:none and gives five Spotify header surfaces an opaque theme colour (top bar, search category bar, Home filter chips, track-list header and stuck header). Measured +5.8 fps on top of the Home card fix.",
       action: s.headerFix ? "Restore blur" : "Remove blur",
       onClick: () => setFix("headerFix", !s.headerFix, s.headerFix ? "Perf Adviser: header blur restored" : "Perf Adviser: header blur removed"),
     }));
@@ -3453,7 +3439,7 @@
             ? coverSrcName + " is spinning the cover. Turning it off in " + coverWhere + " removes the cost at the source; this switch is only an override."
             : "A snippet or theme is spinning the cover. Turning it off is the cleaner fix; this switch is only an override.")
           : "No spinning cover was detected, so this switch would do nothing right now."),
-      technical: "Sets animation-play-state:paused on .cover-art and the Now Playing cover pseudo-elements. Chromium cannot composite this rotation because the same element also carries clip-path and border-radius, so it runs on the main thread every frame. Measured +37.1 fps median (3 paired 8 s runs) while a rotation was active. Cosmetic override only; the detected source is named above.",
+      technical: "Sets animation-play-state:paused on .cover-art and the Now Playing cover pseudo-elements. Chromium cannot composite this rotation because the same element also carries clip-path and border-radius, so it runs on the main thread every frame. Measured +37.1 fps median (3 paired 8 s runs) while a rotation was active. The detected source is named above.",
       action: s.coverPause ? "Resume rotation" : "Pause rotation",
       onClick: () => setFix("coverPause", !s.coverPause, s.coverPause ? "Perf Adviser: cover rotation resumed" : "Perf Adviser: cover rotation paused"),
     }));
@@ -3467,9 +3453,9 @@
         ? "Endless animations are paused only while their element is outside the viewport and resume on the way in. " +
           (s.offscreenPaused ? s.offscreenPaused + " element(s) are paused right now." : "Nothing was offscreen at the last scan.")
         : (animCount
-          ? animCount + " endless animation(s) are running here. Pausing the ones outside the viewport measured +6 fps on Home on this machine."
+          ? animCount + " endless animation(s) are running here. Pausing the ones outside the viewport measured +8 fps on my setup."
           : "No endless animation was found here, so this switch would do nothing until one appears."),
-      technical: "An IntersectionObserver (80 px margin) adds one class to elements that run an infinite CSS animation; the class sets animation-play-state:paused. Elements resume as soon as they enter the viewport. The list is collected when you turn this on, 1.5 s and 5 s later, after each route change and when this panel opens - there is no MutationObserver and no polling, so an animation created later in the same view is only noticed at one of those moments. With the switch off no observer, no timer and no style exist. Measured +6.4 fps median (6 paired 5 s runs, Home scroll, pointer parked) while six ivLyrics background blobs animated top/left/transform 1700 px below the viewport.",
+      technical: "An IntersectionObserver (80 px margin) adds one class to elements that run an infinite CSS animation; the class sets animation-play-state:paused. Elements resume as soon as they enter the viewport. The list is collected when you turn this on, 1.5 s and 5 s later, after each route change and when this panel opens - this switch adds no MutationObserver and no polling, so an animation created later in the same view is only noticed at one of those moments. With the switch off no observer, no timer and no style exist. Measured +7.4 fps median (6 paired 5 s runs, Home scroll, pointer parked) while six ivLyrics background blobs animated top/left/transform 1700 px below the viewport.",
       action: s.offscreen ? "Resume everywhere" : "Pause while offscreen",
       onClick: () => setFix("offscreen", !s.offscreen, s.offscreen ? "Perf Adviser: offscreen animations resumed" : "Perf Adviser: offscreen animations paused"),
     }));
@@ -3479,7 +3465,7 @@
       title: "Theme tweaks",
       on: !!s.themeTweaks,
       detail: "Cosmetic only: a Marketplace card border, a different active-button colour and a 72 px player bar. It does not make Spotify faster.",
-      technical: "Three theme-specific declarations that used to live in the CSS editor: .marketplace-card--installed gets a purple border, --spice-button-active is overridden and the player bar is fixed at 72 px. Not part of the recommended preset and never applied automatically.",
+      technical: "Three theme-specific declarations: .marketplace-card--installed gets a purple border, --spice-button-active is overridden and the player bar is fixed at 72 px. Not part of the recommended performance preset.",
       action: s.themeTweaks ? "Turn off" : "Turn on",
       onClick: () => setFix("themeTweaks", !s.themeTweaks, s.themeTweaks ? "Perf Adviser: theme tweaks off" : "Perf Adviser: theme tweaks on"),
     }));
@@ -3488,7 +3474,7 @@
     const zoomRow = h("div", "display:flex;align-items:center;gap:12px;justify-content:space-between;flex-wrap:wrap;border-top:1px solid rgba(128,128,128,.18);padding:10px 0;");
     const zoomText = h("div", "display:flex;flex-direction:column;gap:4px;flex:1 1 320px;min-width:240px;");
     zoomText.appendChild(h("div", `font-size:13px;color:${C.text};`, "Page zoom"));
-    zoomText.appendChild(h("div", `font-size:12px;color:${C.sub};line-height:1.45;`, "Resets the whole Spotify window to 100%. This repairs the shrunken-UI bug; it is not a speed fix."));
+    zoomText.appendChild(h("div", `font-size:12px;color:${C.sub};line-height:1.45;`, "Resets the whole Spotify window to 100%. This repairs a shrunken-UI bug I was encountering in older builds; it is not a speed fix."));
     zoomText.appendChild(note("What this changes technically", "Calls Spicetify.Platform.ZoomAPI.setZoomLevel(0). Zoom is stored by Spotify itself, so it stays at 100% until you zoom again. It does not change the operating-system display scale."));
     zoomRow.appendChild(zoomText);
     if (s.zoom.level != null && s.zoom.level !== 0) {
@@ -3498,7 +3484,7 @@
           notify("Perf Adviser: zoom reset to 100%");
           await sleep(900);
           refresh();
-        } catch (e) {
+        } catch {
           notify("Perf Adviser: zoom reset failed", true);
         }
       }, true));
@@ -3526,10 +3512,10 @@
       "Makes hovering cheaper by parking :has() rules that currently match nothing and restoring them when their target appears. If a hover ever looks wrong, turn this off first." +
       (rt.live ? " " + rt.live + " :has() rule(s) are in use and are never rewritten." : "")));
     rtText.appendChild(note("What this changes technically",
-      "Chromium treats any live :has() rule as document-wide, so a hover can restyle far more of the page than the hovered control. " +
+      "Chromium treats any live :has() rule as document-wide, so hovering over elements can restyle far more of the page than the hovered control. " +
       "Rules that match nothing are given an inert selector (parked) and restored when a matching node appears; the two global track-peek anchors are mirrored with classes instead. " +
       "Rules that depend on :hover, :focus, :active or :focus-within are never parked, because a hover cannot wait for a rescan. " +
-      "Measured: a wide card hover restyles 951 elements with the rules live and 378 parked; the player bar goes from 938 to 381. Spotify's own card re-render is not removed."));
+      "What I meeasured: a wide card hover restyles 951 elements with the rules live and 378 parked; the player bar goes from 938 to 381. Spotify's own card re-render is not removed."));
     rtRow.appendChild(rtText);
     const rtAction = s.cssOff ? btn("Paused", () => {}, false) : btn(rt.active ? "Turn off" : "Turn on", () => {
       state.runtimePatch = !state.runtimePatch;
@@ -3558,7 +3544,7 @@
     pText.appendChild(h("div", `font-size:13px;color:${C.text};`, "Attribute cost by extension or script"));
     pText.appendChild(h("div", `font-size:12px;color:${C.sub};line-height:1.45;`, prof.recording
       ? "Recording. Scroll the slow page, then click the Perf Adviser icon again and press Stop."
-      : "Start, scroll the slow page for about 10 seconds, then click the icon again and press Stop. The panel closes while it records."));
+      : "Start, manually scroll the slow page for about 10 seconds, then click the icon again and press Stop. The panel closes while it records."));
     pText.appendChild(note("What recording does technically",
       "Wraps timers, animation frames, event listeners and MutationObservers only while recording, then restores the originals. Cost is inclusive callback time plus time spent in forced layout reads, grouped by source file with call and max columns. It also records fps, long tasks and (where available) long-animation-frame script attribution. Everything stays in memory on this machine."));
     pTop.appendChild(pText);
@@ -3679,10 +3665,10 @@
     navText.appendChild(navTitle);
     navText.appendChild(h("div", `font-size:12px;color:${C.sub};line-height:1.45;`,
       !state.navTiming
-        ? "Shows how much jank each page change causes. Turn it on, switch between Home, a playlist and Search, then come back."
+        ? "Shows how much jank each page change causes. Turn it on, switch between Home, a playlist, custom apps, and Search, then come back."
         : "On. Switch pages normally; each change is watched for 2 seconds. A clean change reads close to zero."));
     navText.appendChild(note("What this measures technically",
-      "Cost = settle time (route change to the end of the last long frame that started within 2 s) + the blocking time of those frames. It measures jank after the change, not download or first-paint time. " +
+      "Cost = settle time (route change to the end of the last long frame that started within 2 s) + the blocking time of those frames. It measures jank after the change." +
       "Rows are grouped by route with median, worst and top source. The History.listen subscription retries for about 5 s after load; if it never attached, the panel says so and a Spotify reload is needed."));
     navTop.appendChild(navText);
     navTop.appendChild(btn(state.navTiming ? "Turn off" : "Turn on", () => {
@@ -3738,8 +3724,8 @@
       if (stale.length) topLine.appendChild(pill(stale.length + " stale", C.red));
       selCard.appendChild(topLine);
       selCard.appendChild(note("How to read the table",
-        "Checked on " + health.route + " when the panel opened. OK = matched on its expected route; N/A here = wrong route, or the extension that owns it is not installed; NOT SEEN = expected here but not matched yet; STALE = matched on an earlier Spotify version, not on this one. " +
-        "The list is stored locally with the Spotify version, so a stale row is a concrete bug report: the matching fix would silently do nothing."));
+        "Checked on route: " + health.route + " when the panel opened. Status meanings: OK = matched on its expected route; N/A here = wrong route, or the extension that owns it is not installed; NOT SEEN = expected here but not matched yet; STALE = matched on an earlier Spotify version, not on this one. " +
+        "The list is stored locally with the Spotify version, so a stale row is a concrete bug report: the matching fix may silently do nothing."));
       selCard.appendChild(miniTable(
         ["item", "selector", "expected", "status"],
         health.rows.map((r) => [
@@ -3772,7 +3758,7 @@
     aTitle.appendChild(pill(author.enabled ? "author mode on" : "author mode off", author.enabled ? C.green : C.sub));
     aText.appendChild(aTitle);
     aText.appendChild(h("div", `font-size:12px;color:${C.sub};line-height:1.45;`,
-      "For people writing or reviewing an extension. Turn Author mode on, reload Spotify, pick your extension below and press Run standard test. " +
+      "For people writing or reviewing an extension. Turn Author mode, reload Spotify, pick your extension below and press Run standard test. " +
       "It scrolls Home once, waits, and reports PASS/WARN/FAIL for the usual causes of scroll jank: very broad observers, forced layout reads, and timers or event handlers that run too often. " +
       "It only sees extensions loaded after Perf Adviser, and it is a debugging aid, not a certification."));
     aText.appendChild(note("How it works and what the limits are",
@@ -3858,18 +3844,16 @@
     foot.appendChild(h("summary", "cursor:pointer;", "How it measures / uninstall"));
     foot.appendChild(h("div", "margin-top:6px;",
       "The FPS test scrolls the largest scrollable element for a fixed time and reports median frame rate, p95 frame time, slow frames (>33 ms) and long tasks. " +
-      "It runs with this panel closed, does one unmeasured warm-up scroll first, and acknowledges that Home FPS depends on where the mouse rests. " +
+      "It runs with this panel closed, does one unmeasured warm-up (element loading) scroll first. Home FPS also depends on where the mouse rests, so keep the pointer on the card grid. " +
       "The profiler wraps timers, animation frames, event listeners and MutationObservers only while recording, then restores them. " +
-      "When idle the extension runs no repeating timers, observers or animation frames - just three passive scroll listeners. Offscreen animations, while you have that switch on, keeps one IntersectionObserver and a few one-shot collection timers. " +
+      "When idle the extension has no polling timers or animation frames. It keeps three passive scroll, wheel and touch listeners and, while Runtime CSS patches are on, two MutationObservers (document head and body) that only wake on DOM changes; the one timed retry is a short re-park loop that runs only while a restored rule is live. The offscreen-animation switch, while on, adds one IntersectionObserver and a few one-shot collection timers. " +
       "The CSS/animation inventory is read when the panel is built, never on a repeating timer. " +
-      "Uninstall: run \"spicetify config extensions perf-adviser.js-\" then \"spicetify apply -n\" (or delete perf-adviser.js from %APPDATA%\\spicetify\\Extensions and remove it from config-xpui.ini)."
+      "Uninstall: remove it from marketplace, if you didn't use marketplace to install it then run \"spicetify config extensions perf-adviser.js-\" then \"spicetify apply -n\" (or delete perf-adviser.js from %APPDATA%\\spicetify\\Extensions and remove it from Spotify's config-xpui.ini)."
     ));
     body.appendChild(foot);
 
-    // Never call PopupModal.display() while our modal is already open: it
-    // rebuilds the modal, which closes the panel (Report <-> Bisect used to do
-    // exactly that). Swap the content in the mounted root instead so the modal,
-    // its scroll box and its listeners survive a tab switch or a refresh.
+    // Never call PopupModal.display() while the modal is already open: it
+    // rebuilds the modal, which closes the panel.
     const mounted = panelRoot && panelRoot.isConnected ? panelRoot : null;
     if (mounted) {
       // Replacing the clicked tab button inside the click handler makes
@@ -3882,7 +3866,7 @@
         while (root.firstChild) mounted.appendChild(root.firstChild);
         const restoreMounted = () => { mounted.scrollTop = panelScroll[panelView] || 0; };
         restoreMounted();
-        try { requestAnimationFrame(() => requestAnimationFrame(restoreMounted)); } catch (e) { /* ignore */ }
+        try { requestAnimationFrame(() => requestAnimationFrame(restoreMounted)); } catch { /* ignore */ }
         skinModal();
       }, 0);
       return;
@@ -3895,7 +3879,7 @@
     // modal may lay out a frame later, so repeat once after layout.
     const restore = () => { root.scrollTop = panelScroll[panelView] || 0; };
     restore();
-    try { requestAnimationFrame(() => requestAnimationFrame(restore)); } catch (e) { /* ignore */ }
+    try { requestAnimationFrame(() => requestAnimationFrame(restore)); } catch { /* ignore */ }
     skinModal();
   }
 
@@ -3911,7 +3895,7 @@
     if (busy) return;
     busy = true;
     savePanelScroll();
-    try { Spicetify.PopupModal.hide(); } catch (e) { /* ignore */ }
+    try { Spicetify.PopupModal.hide(); } catch { /* ignore */ }
     notify("Perf Adviser: measuring " + (full ? "2 x 6 s" : "5 s") + " - the page will scroll");
     await sleep(600);
     try {
@@ -3929,8 +3913,8 @@
     } catch (e) {
       notify("Perf Adviser: measurement failed - " + (e && e.message ? e.message : String(e)), true);
     } finally {
-      // Always reopen, including after a failed run. Leaving the panel closed
-      // was the other half of the "measure closes the popup" bug.
+      // Always reopen, including after a failed run, so the panel is never
+      // left closed.
       busy = false;
       if (last) showPanel();
     }
@@ -3939,7 +3923,7 @@
 
   function startProfile() {
     if (prof.recording) return;
-    savePanelScroll(); try { Spicetify.PopupModal.hide(); } catch (e) { /* ignore */ }
+    savePanelScroll(); try { Spicetify.PopupModal.hide(); } catch { /* ignore */ }
     prof.start();
     last = { scan: last ? last.scan : null, bench: last ? last.bench : null, prof: null };
     notify("Perf Adviser: recording - scroll the slow page, then reopen the gauge and press Stop");
@@ -3960,11 +3944,10 @@
   }
 
   // ------------------------------------------------ keep panel.onopen fresh
-  const origShowPanel = showPanel;
-  showPanel = function () {
+  function showPanel() {
     if (last) last.when = Date.now();
-    origShowPanel();
-  };
+    renderPanel();
+  }
 
   // ---------------------------------------------------------------- install
   (async function install() {
@@ -4078,7 +4061,7 @@
         scans: runtime.scans,
         revives: runtime.revives,
         liveOriginals: runtime.parked
-          .filter((p) => { try { return p.rule && p.rule.parentStyleSheet && p.rule.selectorText === p.original; } catch (e) { return false; } })
+          .filter((p) => { try { return p.rule && p.rule.parentStyleSheet && p.rule.selectorText === p.original; } catch { return false; } })
           .map((p) => p.original.slice(0, 100))
           .slice(0, 10),
         preconditions: runtime.precond,
