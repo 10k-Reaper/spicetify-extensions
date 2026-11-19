@@ -247,7 +247,7 @@ If it is not listed, use the manual installation below.
 
 ### Manual Installation
 
-1. Download [`liquid-lyrics-revival.js`](https://raw.githubusercontent.com/10k-Reaper/spicetify-extensions/main/revived/liquid-lyrics-revival/liquid-lyrics-revival.js).
+1. Download [`liquid-lyrics-revival.js`](https://github.com/10k-Reaper/spicetify-extensions/releases/latest/download/liquid-lyrics-revival.js).
 2. Copy it into your Spicetify extensions folder:
    - Windows: `%appdata%\spicetify\Extensions\`
    - Linux / macOS: `~/.config/spicetify/Extensions/`
