@@ -1,10 +1,57 @@
+# Spicetify Extensions
+
+A collection of Spicetify extensions maintained by
+[10k-Reaper](https://github.com/10k-Reaper). Repository stars are shared by
+every extension here; each extension keeps its own install path, README, and
+license.
+
+## Extensions
+
+| Extension | What it does | Marketplace name | Manual install |
+|---|---|---|---|
+| [Performance Adviser](perf-adviser.js) | Measures Spotify UI scroll performance and applies reversible CSS fixes. | Performance Adviser | `spicetify config extensions perf-adviser.js` |
+| [Liquid Lyrics Revival](revived/liquid-lyrics-revival/README.md) | Word-by-word synced lyrics, fullscreen lyrics, romanization, and a sidebar card. | Liquid Lyrics Revival | `spicetify config extensions liquid-lyrics-revival.js` |
+
+Both are installed the same way: copy the `.js` file into your Spicetify
+`Extensions` folder, add it with `spicetify config extensions <file>`, and run
+`spicetify apply`. See each extension's README for details.
+
+## Revived extensions
+
+`revived/` holds community-maintained forks of NMWplays' extensions. Each one is
+self-contained, with its own README, preview, `LICENSE`, and `NOTICE.md`.
+
+- **[Liquid Lyrics Revival](revived/liquid-lyrics-revival/README.md)** is a fork
+  of [NMWplays/Liquid-Lyrics](https://github.com/NMWplays/Liquid-Lyrics), kept on
+  Spicetify and based on the upstream `spicetify` branch (fork commit
+  `d5a453d`). The original project, design, and code are by NMW.
+
+Do not install Liquid Lyrics Revival alongside NMW's original
+`liquid-lyrics.js`. Both files use the same `window.__liquidLyricsLoaded` guard
+and the same storage keys, so whichever loads first wins and the second one does
+nothing.
+
+## Licensing
+
+This repository has two license scopes:
+
+- Root-level files (`perf-adviser.js`, the root `README.md`, `manifest.json`,
+  `docs/`, `tests/`, and `scripts/`) are MIT-licensed. See [LICENSE](LICENSE).
+- `revived/liquid-lyrics-revival/` is AGPL-3.0. See
+  [its LICENSE](revived/liquid-lyrics-revival/LICENSE) and
+  [NOTICE.md](revived/liquid-lyrics-revival/NOTICE.md).
+
+The scopes are separate works. Do not relicense either one under the other.
+
+---
+
 # Performance Adviser
 
 A single-file Spicetify extension that measures your Spotify UI's scroll performance, finds the installed snippet, theme or extension responsible, and removes the cost with reversible CSS.
 
 ![Performance Adviser panel](preview.png)
 
-![Release downloads](https://img.shields.io/github/downloads/10k-Reaper/spicetify-performance-adviser/total?label=release%20downloads)
+![Release downloads](https://img.shields.io/github/downloads/10k-Reaper/spicetify-extensions/total?label=release%20downloads)
 
 It does not rewrite Spotify's own JavaScript. Each fix is a separate toggle, and the panel shows the before/after number it measured for that toggle.
 
@@ -45,7 +92,7 @@ It does not rewrite Spotify's own JavaScript. Each fix is a separate toggle, and
 
 ### Manually
 
-1. Download [`perf-adviser.js`](https://github.com/10k-Reaper/spicetify-performance-adviser/releases/download/v1.1.0/perf-adviser.js) from the [v1.1.0 release](https://github.com/10k-Reaper/spicetify-performance-adviser/releases/tag/v1.1.0) (or `gh release download v1.1.0 -R 10k-Reaper/spicetify-performance-adviser`).
+1. Download [`perf-adviser.js`](https://github.com/10k-Reaper/spicetify-extensions/releases/download/v1.1.0/perf-adviser.js) from the [v1.1.0 release](https://github.com/10k-Reaper/spicetify-extensions/releases/tag/v1.1.0) (or `gh release download v1.1.0 -R 10k-Reaper/spicetify-extensions`).
 2. Copy it into your Spicetify extensions folder:
    - Windows: `%APPDATA%\spicetify\Extensions\`
    - Linux/macOS: `~/.config/spicetify/Extensions/`
@@ -102,7 +149,7 @@ The panel remembers your choices in `localStorage["perf-adviser:state"]`. Select
 
 The package is tuned for the common case: a blurred theme (Lucid) on Home. In a test where the pointer rested on a Home card and the Rotating Cover Art snippet was installed, the recommended preset measured **27.7 → 72.0 fps (+44.3 fps, 2.6×)**; the card-button fix alone accounted for most of it. Those are synthetic scroll numbers from one machine, and your client may differ.
 
-Full tables and caveats - scroll, hover/`:has()`, idle overhead - are in [docs/MEASUREMENTS.md](https://github.com/10k-Reaper/spicetify-performance-adviser/blob/main/docs/MEASUREMENTS.md).
+Full tables and caveats - scroll, hover/`:has()`, idle overhead - are in [docs/MEASUREMENTS.md](https://github.com/10k-Reaper/spicetify-extensions/blob/main/docs/MEASUREMENTS.md).
 
 ## Compatibility
 
