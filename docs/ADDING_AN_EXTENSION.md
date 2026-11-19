@@ -71,8 +71,8 @@ extension.
 - In the extension's README, document installation, migration from the original
   file name, and the fact that the original and the revived build should not be
   installed together when they share a guard or storage keys.
-- Add the extension to the table and the "Revived extensions" section in the
-  repository root `README.md`.
+- Add the extension to the **Extensions** list and the **Revived extensions**
+  section in the repository root `README.md`.
 - Keep the upstream project and NMW credited.
 
 ## 6. Validate
