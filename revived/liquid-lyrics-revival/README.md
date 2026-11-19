@@ -35,6 +35,7 @@ In accordance with AGPL-3.0, the changes in this fork are marked here:
   `vm.Script`) and removed the duplicate script.
 - Replaced the Discord header button with a "Report an issue" button that
   links to the host repository's Issues page.
+- Pointed the Star on GitHub button at the host repository.
 - Removed the upstream "SpotiKit move notice" modal and its
   `spotikit-move-notice-dismissed` localStorage key; this fork stays on
   Spicetify.

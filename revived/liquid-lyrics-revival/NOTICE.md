@@ -34,6 +34,7 @@ In accordance with AGPL-3.0, the modifications are recorded here:
   `revived/liquid-lyrics-revival/`.
 - Replaced the Discord header button with a "Report an issue" button that links
   to the host repository's Issues page.
+- Pointed the Star on GitHub button at the host repository.
 - Updated the README and repository manifest for the monorepo.
 
 The upstream copyright notice and AGPL-3.0 license text are retained in
