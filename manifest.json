@@ -9,5 +9,17 @@
       { "name": "10k-Reaper", "url": "https://github.com/10k-Reaper" }
     ],
     "tags": ["performance", "fps", "lag", "stutter", "scroll", "optimization", "profiler", "blur"]
+  },
+  {
+    "name": "Liquid Lyrics Revival",
+    "description": "Community-maintained Spicetify lyrics extension forked from NMW's Liquid Lyrics. Smooth word-by-word synced lyrics, fullscreen lyrics, romanization, and an expandable sidebar card.",
+    "preview": "revived/liquid-lyrics-revival/preview.png",
+    "main": "revived/liquid-lyrics-revival/liquid-lyrics-revival.js",
+    "readme": "revived/liquid-lyrics-revival/README.md",
+    "authors": [
+      { "name": "NMW", "url": "https://github.com/NMWplays" },
+      { "name": "10k-Reaper", "url": "https://github.com/10k-Reaper" }
+    ],
+    "tags": ["lyrics", "revived", "liquid", "fullscreen", "spicetify", "smooth", "animated"]
   }
 ]
