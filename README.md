@@ -18,8 +18,10 @@ in [docs/perf-adviser.md](docs/perf-adviser.md).
 Word-by-word synced lyrics, fullscreen lyrics, romanization, and an expandable
 sidebar card.
 
-To use: install it from the Spicetify Marketplace, or follow the install steps
-in [revived/liquid-lyrics-revival/README.md](revived/liquid-lyrics-revival/README.md).
+To use: download
+[`liquid-lyrics-revival.js`](https://github.com/10k-Reaper/spicetify-extensions/releases/latest/download/liquid-lyrics-revival.js)
+from the latest release, install it from the Spicetify Marketplace, or follow the
+install steps in [revived/liquid-lyrics-revival/README.md](revived/liquid-lyrics-revival/README.md).
 
 ## Revived extensions
 

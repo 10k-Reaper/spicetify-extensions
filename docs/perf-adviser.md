@@ -39,7 +39,7 @@ It does not rewrite Spotify's own JavaScript. Each fix is a separate toggle, and
 
 ### Manually
 
-1. Download [`perf-adviser.js`](https://github.com/10k-Reaper/spicetify-extensions/releases/download/v1.1.0/perf-adviser.js) from the [v1.1.0 release](https://github.com/10k-Reaper/spicetify-extensions/releases/tag/v1.1.0) (or `gh release download v1.1.0 -R 10k-Reaper/spicetify-extensions`).
+1. Download [`perf-adviser.js`](https://github.com/10k-Reaper/spicetify-extensions/releases/latest/download/perf-adviser.js) from the [latest release](https://github.com/10k-Reaper/spicetify-extensions/releases/latest) (or `gh release download -R 10k-Reaper/spicetify-extensions --pattern perf-adviser.js`).
 2. Copy it into your Spicetify extensions folder:
    - Windows: `%APPDATA%\spicetify\Extensions\`
    - Linux/macOS: `~/.config/spicetify/Extensions/`
