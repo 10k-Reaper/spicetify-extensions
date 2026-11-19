@@ -4,7 +4,7 @@
     "description": "Finds what makes Spotify's Home page stutter and offers reversible fixes: removes sticky-header blur and scroll-time card tooltip churn, applies runtime CSS patches that park idle :has() rules, names the snippet or theme responsible, and includes a profiler. 27.7 -> 72.0 fps in testing.",
     "preview": "preview.png",
     "main": "perf-adviser.js",
-    "readme": "README.md",
+    "readme": "docs/perf-adviser.md",
     "authors": [
       { "name": "10k-Reaper", "url": "https://github.com/10k-Reaper" }
     ],
