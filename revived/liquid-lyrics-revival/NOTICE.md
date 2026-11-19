@@ -12,7 +12,9 @@
 ## This fork
 
 - Maintainer: 10k-Reaper (<https://github.com/10k-Reaper>)
-- Host: <https://github.com/10k-Reaper/spicetify-extensions>
+- Source for the Revival code:
+  <https://github.com/10k-Reaper/spicetify-extensions/tree/main/revived/liquid-lyrics-revival>
+- Host repository: <https://github.com/10k-Reaper/spicetify-extensions>
 - Folder: `revived/liquid-lyrics-revival/`
 
 ## Changes made in this fork
@@ -28,8 +30,8 @@ In accordance with AGPL-3.0, the modifications are recorded here:
   fork-local `scripts/verify-classic-script.mjs` was removed.
 - Renamed `liquid-lyrics.js` to `liquid-lyrics-revival.js`.
 - Moved the extension into this repository under `revived/liquid-lyrics-revival/`.
-- Updated project links from the standalone Revival repository to the host
-  repository.
+- Updated project links to the host repository path
+  `revived/liquid-lyrics-revival/`.
 - Replaced the Discord header button with a "Report an issue" button that links
   to the host repository's Issues page.
 - Updated the README and repository manifest for the monorepo.
