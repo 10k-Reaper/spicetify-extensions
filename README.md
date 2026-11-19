@@ -7,14 +7,27 @@ license.
 
 ## Extensions
 
-| Extension | What it does | Marketplace name | Manual install |
-|---|---|---|---|
-| [Performance Adviser](perf-adviser.js) | Measures Spotify UI scroll performance and applies reversible CSS fixes. | Performance Adviser | `spicetify config extensions perf-adviser.js` |
-| [Liquid Lyrics Revival](revived/liquid-lyrics-revival/README.md) | Word-by-word synced lyrics, fullscreen lyrics, romanization, and a sidebar card. | Liquid Lyrics Revival | `spicetify config extensions liquid-lyrics-revival.js` |
+### [Performance Adviser](README.md#performance-adviser)
 
-Both are installed the same way: copy the `.js` file into your Spicetify
-`Extensions` folder, add it with `spicetify config extensions <file>`, and run
-`spicetify apply`. See each extension's README for details.
+Measures Spotify UI scroll performance and applies reversible CSS fixes.
+
+To use:
+- Download [`perf-adviser.js`](https://github.com/10k-Reaper/spicetify-extensions/releases/download/v1.1.0/perf-adviser.js).
+- Copy it into your Spicetify extensions folder (`%appdata%\spicetify\Extensions\` on Windows, `~/.config/spicetify/Extensions/` on Linux/macOS).
+- Run `spicetify config extensions perf-adviser.js` and `spicetify apply`.
+- Restart Spotify.
+
+### [Liquid Lyrics Revival](revived/liquid-lyrics-revival/README.md)
+
+Word-by-word synced lyrics, fullscreen lyrics, romanization, and an expandable sidebar card.
+
+To use:
+- Download [`liquid-lyrics-revival.js`](https://raw.githubusercontent.com/10k-Reaper/spicetify-extensions/main/revived/liquid-lyrics-revival/liquid-lyrics-revival.js).
+- Copy it into your Spicetify extensions folder (`%appdata%\spicetify\Extensions\` on Windows, `~/.config/spicetify/Extensions/` on Linux/macOS).
+- Run `spicetify config extensions liquid-lyrics-revival.js` and `spicetify apply`.
+- Restart Spotify.
+
+See each extension's README for settings, migration notes, and compatibility details.
 
 ## Revived extensions
 
