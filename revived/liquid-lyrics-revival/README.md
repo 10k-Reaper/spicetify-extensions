@@ -229,7 +229,7 @@ a theme that sets none.
 Some details may still not match perfectly outside of Glowify and Liquify. If something looks
 off, most of it can be changed in the settings.
 
-## Installation
+## Install
 
 ### Marketplace Installation
 
@@ -246,30 +246,19 @@ If it is not listed, use the manual installation below.
 
 ### Manual Installation
 
-Download `liquid-lyrics-revival.js` from the host repository:
+1. Download [`liquid-lyrics-revival.js`](https://raw.githubusercontent.com/10k-Reaper/spicetify-extensions/main/revived/liquid-lyrics-revival/liquid-lyrics-revival.js).
+2. Copy it into your Spicetify extensions folder:
+   - Windows: `%appdata%\spicetify\Extensions\`
+   - Linux / macOS: `~/.config/spicetify/Extensions/`
+3. Add it to the extensions list and apply:
 
-`https://raw.githubusercontent.com/10k-Reaper/spicetify-extensions/main/revived/liquid-lyrics-revival/liquid-lyrics-revival.js`
+   ```bash
+   spicetify config extensions liquid-lyrics-revival.js
+   spicetify apply
+   ```
+4. Restart Spotify.
 
-Then place it inside your Spicetify extensions folder.
-
-**Windows:**
-
-```
-%appdata%\spicetify\Extensions\
-```
-
-**Linux / macOS:**
-
-```
-~/.config/spicetify/Extensions/
-```
-
-Then enable the extension:
-
-```bash
-spicetify config extensions liquid-lyrics-revival.js
-spicetify apply
-```
+Keep only one copy installed: a manual copy plus a Marketplace copy both load, and only the first one runs.
 
 ### Migrating from the original Liquid Lyrics
 

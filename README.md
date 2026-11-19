@@ -18,11 +18,8 @@ in [docs/perf-adviser.md](docs/perf-adviser.md).
 Word-by-word synced lyrics, fullscreen lyrics, romanization, and an expandable
 sidebar card.
 
-To use:
-- Download [`liquid-lyrics-revival.js`](https://raw.githubusercontent.com/10k-Reaper/spicetify-extensions/main/revived/liquid-lyrics-revival/liquid-lyrics-revival.js).
-- Copy it into your Spicetify extensions folder (`%appdata%\spicetify\Extensions\` on Windows, `~/.config/spicetify/Extensions/` on Linux/macOS).
-- Run `spicetify config extensions liquid-lyrics-revival.js` and `spicetify apply`.
-- Restart Spotify.
+To use: install it from the Spicetify Marketplace, or follow the install steps
+in [revived/liquid-lyrics-revival/README.md](revived/liquid-lyrics-revival/README.md).
 
 ## Revived extensions
 
