@@ -18,22 +18,25 @@ Spicetify. It is based on the upstream `spicetify` branch, the last
 Spicetify-compatible line (tip commit `d5a453d`). The original project, design
 and code are by NMW.
 
-Fork source: `https://github.com/10k-Reaper/Liquid-Lyrics-Revival`
+Fork location:
+`https://github.com/10k-Reaper/spicetify-extensions/tree/main/revived/liquid-lyrics-revival`
 
 ### Modifications
 
 In accordance with AGPL-3.0, the changes in this fork are marked here:
 
 - Rebranded the extension as "Liquid Lyrics Revival", with in-app labels and
-  project/download links pointing at this fork.
-- Added an AGPL-3.0 SPDX header and NMW credit to `liquid-lyrics.js`.
-- Added `scripts/verify-classic-script.mjs`, which fails if the Spicetify build
-  regains `import.meta` or top-level `import`/`export` syntax.
+  project links pointing at the host repository.
+- Added an AGPL-3.0 SPDX header and NMW credit to the extension bundle.
+- Moved the extension into `revived/liquid-lyrics-revival/` in the host
+  repository and renamed `liquid-lyrics.js` to `liquid-lyrics-revival.js`.
+- Folded the fork's standalone `scripts/verify-classic-script.mjs` guard into
+  the repository-wide `scripts/validate-manifest.mjs` (Node `--check` plus
+  `vm.Script`) and removed the duplicate script.
 - Removed the upstream "SpotiKit move notice" modal and its
   `spotikit-move-notice-dismissed` localStorage key; this fork stays on
   Spicetify.
-- Updated this README and `manifest.json` for the fork, including the fork's
-  GitHub and release URLs.
+- Updated this README and the repository manifest for the monorepo.
 
 ## Features
 
@@ -228,8 +231,8 @@ off, most of it can be changed in the settings.
 
 ### Marketplace Installation
 
-Marketplace availability depends on the fork's listing. If it is listed, install
-it from there:
+Marketplace availability depends on the repository's listing. If it is listed,
+install it from there:
 
 1. Open Spotify
 2. Open the Spicetify Marketplace
@@ -241,9 +244,9 @@ If it is not listed, use the manual installation below.
 
 ### Manual Installation
 
-Download the latest `liquid-lyrics.js` from this fork's releases:
+Download `liquid-lyrics-revival.js` from the host repository:
 
-`https://github.com/10k-Reaper/Liquid-Lyrics-Revival/releases/latest`
+`https://raw.githubusercontent.com/10k-Reaper/spicetify-extensions/main/revived/liquid-lyrics-revival/liquid-lyrics-revival.js`
 
 Then place it inside your Spicetify extensions folder.
 
@@ -262,9 +265,29 @@ Then place it inside your Spicetify extensions folder.
 Then enable the extension:
 
 ```bash
-spicetify config extensions liquid-lyrics.js
+spicetify config extensions liquid-lyrics-revival.js
 spicetify apply
 ```
+
+### Migrating from the original Liquid Lyrics
+
+The storage keys and DOM identifiers are unchanged, so saved settings carry
+over. Do not install this build alongside NMW's original `liquid-lyrics.js`:
+both files use the same `window.__liquidLyricsLoaded` guard and the same
+storage keys, so whichever loads first wins and the second one does nothing.
+
+Remove the old entry, add the renamed one, and apply:
+
+```bash
+spicetify config extensions liquid-lyrics.js-
+spicetify config extensions liquid-lyrics-revival.js
+spicetify apply
+```
+
+After that, delete the old file from your extensions folder:
+
+- Windows: `%appdata%\spicetify\Extensions\liquid-lyrics.js`
+- Linux / macOS: `~/.config/spicetify/Extensions/liquid-lyrics.js`
 
 ## Compatibility
 
@@ -288,12 +311,14 @@ Planned improvements:
 Created by NMW. Original project:
 [NMWplays/Liquid-Lyrics](https://github.com/NMWplays/Liquid-Lyrics).
 
-This fork is maintained by `10k-Reaper` (`https://github.com/10k-Reaper`).
+This fork is maintained by [10k-Reaper](https://github.com/10k-Reaper) in
+[spicetify-extensions](https://github.com/10k-Reaper/spicetify-extensions).
 
 Built alongside the Glowify and Liquify Spicetify themes.
 
 ## License
 
-This project is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). See the
-LICENSE file for details. Modifications in this fork are marked in the
-[Fork notice](#fork-notice) above.
+This folder is licensed under the GNU Affero General Public License v3.0
+(AGPL-3.0). See [LICENSE](LICENSE) for the full text and [NOTICE.md](NOTICE.md)
+for the source, authorship, and change record. The repository's root files are
+MIT-licensed; see the repository root README for the licensing scope.
