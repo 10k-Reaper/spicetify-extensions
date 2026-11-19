@@ -168,9 +168,21 @@
   };
   function loadState() {
     let stored = {};
-    try { stored = JSON.parse(localStorage.getItem(STATE_KEY) || "{}") || {}; } catch { stored = {}; }
+    try {
+      const raw = localStorage.getItem(STATE_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      // Only a plain object is usable. Arrays, strings, numbers and null fall
+      // back to the defaults instead of becoming an empty saved choice.
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) stored = parsed;
+    } catch { stored = {}; }
     const s = {};
-    for (const k of Object.keys(DEFAULTS)) s[k] = k in stored ? !!stored[k] : DEFAULTS[k];
+    for (const k of Object.keys(DEFAULTS)) {
+      const v = stored[k];
+      // Keep a saved boolean; a missing or wrongly typed field gets its default.
+      // Unknown fields are ignored, so a newer build's state does not break this
+      // one and a stale field does not silently become "on".
+      s[k] = typeof v === "boolean" ? v : DEFAULTS[k];
+    }
     return s;
   }
   function saveState(s) {
@@ -348,6 +360,15 @@
     return blocks;
   }
 
+  // Scroll-scoped card play button state. These live above the first
+  // applyInjectedFixes() call because that call reaches clearScrollClass() when
+  // the saved state has CSS paused (or the card fix off). Declaring them later
+  // with `let` left them in the temporal dead zone and the throw aborted the
+  // whole extension before install() could create the icon.
+  let scrollTimer = null;
+  let scrollHost = null;
+  let scrollSuppressUntil = 0;
+
   function applyInjectedFixes() {
     const blocks = activeBlocks();
     let el = document.getElementById(FIX_ID);
@@ -364,7 +385,9 @@
     el.textContent = blocks.join("\n");
     if (state.cssOff || !state.cardPlayFix) clearScrollClass();
   }
-  applyInjectedFixes();
+  // A failure restoring a saved fix must never stop the UI (icon, menu item,
+  // panel) from being installed; the pause switch only disables effects.
+  try { applyInjectedFixes(); } catch (e) { console.warn("Perf Adviser: could not restore injected CSS", e); }
 
   // ------------------------------------------------- offscreen animations
   // Optional. An infinite CSS animation keeps costing style/layout work even
@@ -459,7 +482,7 @@
     else offscreenDisable();
   }
   // Restore a saved choice on reload. Nothing runs when the switch is off.
-  syncOffscreen();
+  try { syncOffscreen(); } catch (e) { console.warn("Perf Adviser: could not restore the offscreen observer", e); }
 
   // ------------------------------------------------------- panel surface
   // Spotify's PopupModal surface is translucent + a 32 px blur.
@@ -957,7 +980,7 @@
     installPatchObservers();
     fullScan();
   }
-  syncRuntimePatches();
+  try { syncRuntimePatches(); } catch (e) { console.warn("Perf Adviser: could not restore runtime patches", e); }
   // Stylesheets are injected by Marketplace after this file runs; a couple of
   // delayed scans pick them up without polling.
   setTimeout(() => scheduleScan(0), 1500);
@@ -968,10 +991,6 @@
   // The class must only follow the Home page: capturing scroll/wheel events
   // also sees Now Playing lyrics, playlists and the Library sidebar, and adding
   // the class for those hid the Home play button for no reason.
-  let scrollTimer = null;
-  let scrollHost = null;
-  let scrollSuppressUntil = 0;
-
   function clearScrollClass() {
     for (const el of document.querySelectorAll("." + SCROLL_CLASS)) el.classList.remove(SCROLL_CLASS);
     scrollHost = null;
@@ -1656,7 +1675,7 @@
       },
     };
   })();
-  lag.sync();
+  try { lag.sync(); } catch (e) { console.warn("Perf Adviser: could not restore lag recording", e); }
 
   // Route changes are the only navigation signal. The
   // listener is installed once and does nothing while navTiming is off. On a
@@ -2299,8 +2318,10 @@
   // result. Start-up calibration measures that noise with two identical runs.
   const BISECT_KEY = "perf-adviser:bisect";
   const BISECT = { runMs: 5000, runs: 3, maxRounds: 8, repeatMax: 1 };
+  const RELOAD_HINT_ID = "perf-adviser-bisect-reload-hint";
   let bisect = loadBisect();
   let bisectBusy = false;
+  let reloadGuard = null;
 
   function loadBisect() {
     try {
@@ -2309,6 +2330,16 @@
       if (!Array.isArray(v.rounds)) v.rounds = [];
       if (!Array.isArray(v.found)) v.found = [];
       if (!Array.isArray(v.disabled)) v.disabled = [];
+      // Older saves (and Marketplace titles) can contain this extension itself.
+      // Drop it from every list so a resumed bisect never asks the user to
+      // uninstall Perf Adviser.
+      v.candidates = v.candidates.filter((n) => !isSelfName(n));
+      v.found = v.found.filter((n) => !isSelfName(n));
+      v.disabled = v.disabled.filter((n) => !isSelfName(n));
+      if (v.pending && Array.isArray(v.pending.toggled)) {
+        v.pending.toggled = v.pending.toggled.filter((n) => !isSelfName(n));
+        if (!v.pending.toggled.length) { v.pending = null; v.awaiting = false; }
+      }
       v.noiseFloor = +v.noiseFloor || 0;
       return v;
     } catch { return null; }
@@ -2318,6 +2349,10 @@
       if (bisect) localStorage.setItem(BISECT_KEY, JSON.stringify(bisect));
       else localStorage.removeItem(BISECT_KEY);
     } catch { /* ignore */ }
+    // The reload guard only has to exist while a round is waiting for the user
+    // to change extensions. Every bisect write goes through here.
+    if (shouldGuardReload()) ensureReloadGuard();
+    else stopReloadGuard();
   }
   function resetBisect() { bisect = null; saveBisect(); clearBisectMarks(); }
 
@@ -2333,6 +2368,14 @@
       .replace(/[^a-z0-9]+/g, "");
   }
 
+  // Marketplace titles this extension "Performance Adviser", while the config
+  // fallback only knows the file stem "perf-adviser". Both keys are this
+  // extension; neither belongs in a bisect candidate list.
+  function isSelfName(n) {
+    const k = nameKey(n);
+    return k === "perfadviser" || k === "performanceadviser";
+  }
+
   function extensionNames(s) {
     const out = [];
     const seen = new Set();
@@ -2340,7 +2383,7 @@
       const n = String(name == null ? "" : name).trim();
       if (!n) return;
       const k = nameKey(n);
-      if (!k || k === "perfadviser" || seen.has(k)) return;
+      if (!k || isSelfName(n) || seen.has(k)) return;
       seen.add(k);
       out.push(n);
     };
@@ -2402,6 +2445,58 @@
     const banner = document.getElementById(BANNER_ID);
     if (banner) banner.remove();
     bisectMarks = { names: [], highlighted: [], missing: [], at: null };
+  }
+
+  // A bisect round is only valid after every card in that round has been
+  // changed. Marketplace shows its own "Reload Spotify" modal after each card,
+  // which invites an early reload and wastes the round. While a round is
+  // waiting, hide that modal and show this extension's own note above the
+  // player bar instead; the note has its own Reload button for when the list is
+  // finished.
+  function shouldGuardReload() {
+    return !!(bisect && bisect.awaiting && bisect.pending &&
+      Array.isArray(bisect.pending.toggled) && bisect.pending.toggled.length);
+  }
+  function showBisectReloadHint() {
+    if (document.getElementById(RELOAD_HINT_ID)) return;
+    const el = h("div", "position:fixed;left:50%;bottom:170px;transform:translateX(-50%);z-index:2147483000;display:flex;align-items:center;gap:10px;max-width:min(620px,92vw);padding:10px 12px;border-radius:12px;background:#062730;color:var(--spice-text,#fff);border:1px solid #ffa42b;box-shadow:0 8px 24px rgba(0,0,0,.45);font-size:12px;line-height:1.4;");
+    el.id = RELOAD_HINT_ID;
+    el.setAttribute("role", "status");
+    el.appendChild(h("div", "flex:1 1 auto;",
+      "Don't reload yet: change every outlined card in this round first. Marketplace's reload prompt is hidden so an early reload cannot waste the round."));
+    const go = h("button", "flex:none;padding:4px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.35);background:transparent;color:inherit;font-size:11px;cursor:pointer;", "Reload Spotify");
+    go.addEventListener("click", reloadSpotify);
+    el.appendChild(go);
+    const close = h("button", "flex:none;padding:4px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.35);background:transparent;color:inherit;font-size:11px;cursor:pointer;", "Dismiss");
+    close.addEventListener("click", () => el.remove());
+    el.appendChild(close);
+    (document.body || document.documentElement).appendChild(el);
+  }
+  function stopReloadGuard() {
+    if (!reloadGuard) return;
+    try { reloadGuard.disconnect(); } catch { /* ignore */ }
+    reloadGuard = null;
+    const hint = document.getElementById(RELOAD_HINT_ID);
+    if (hint) hint.remove();
+  }
+  function ensureReloadGuard() {
+    if (!shouldGuardReload() || reloadGuard) return;
+    if (typeof MutationObserver !== "function") return;
+    reloadGuard = new MutationObserver(() => {
+      if (!shouldGuardReload()) { stopReloadGuard(); return; }
+      // React only to Marketplace's reload modal. No element, no action: the
+      // observer stays armed while the round is waiting and does nothing on any
+      // other DOM change.
+      if (!document.getElementById("marketplace-reload-container")) return;
+      // Never close this extension's own panel if it is the visible modal.
+      if (!panelRoot || !panelRoot.isConnected) {
+        try { Spicetify.PopupModal.hide(); } catch { /* ignore */ }
+      }
+      showBisectReloadHint();
+    });
+    try {
+      reloadGuard.observe(document.body || document.documentElement, { childList: true, subtree: true });
+    } catch { reloadGuard = null; }
   }
 
   // One subscription, installed the first time a round is opened, so the marks
@@ -2561,11 +2656,15 @@
         " in " + where + ": the " + highlighted.length + " outlined card(s) are this round's set. " +
         (inBrowse ? inBrowse + " of them are on the Extensions tab because Marketplace moves a disabled extension there; press Install to turn it back on. " : "") +
         (missing.length ? missing.length + " not found on this page: " + missing.join(", ") + ". " : "") +
-        "Reload Spotify afterwards, then measure again. Perf Adviser changes nothing itself."));
+        "Don't reload until every outlined card is changed - Marketplace's own reload prompt is hidden during this round. Then press Reload Spotify here (or in the Perf Adviser panel) and measure again. Perf Adviser changes nothing itself."));
       const close = h("button", "", "Dismiss");
       close.addEventListener("click", clearBisectMarks);
       banner.appendChild(close);
+      const go = h("button", "", "Reload Spotify");
+      go.addEventListener("click", reloadSpotify);
+      banner.appendChild(go);
       (document.body || document.documentElement).appendChild(banner);
+      ensureReloadGuard();
 
       return {
         ok: !!highlighted.length,
@@ -3186,6 +3285,25 @@
     headRight.appendChild(reloadBtn);
     head.appendChild(headRight);
     root.appendChild(head);
+
+    // The pause switch must be visible from every tab, not only from the fixes
+    // list: the icon and panel stay available, only the effects stop.
+    if (s.cssOff) {
+      const paused = h("div", "display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:9px 12px;border-radius:10px;background:rgba(255,164,43,.10);border:1px solid rgba(255,164,43,.45);");
+      paused.setAttribute("role", "status");
+      paused.appendChild(h("div", `font-size:12px;color:${C.text};line-height:1.45;flex:1 1 300px;`,
+        "Paused: every injected CSS rule, runtime patch, scroll class and offscreen observer is off. The icon and this panel stay available; your individual choices are remembered."));
+      paused.appendChild(btn("Resume all fixes", () => {
+        state.cssOff = false;
+        saveState(state);
+        applyInjectedFixes();
+        syncRuntimePatches();
+        syncOffscreen();
+        notify("Perf Adviser: all fixes resumed");
+        refresh();
+      }, true));
+      root.appendChild(paused);
+    }
 
     // report / other / bisect tabs; only one body is shown, all are built so
     // switching back does not need a measurement
@@ -3962,6 +4080,10 @@
     } else if (Spicetify.Menu && Spicetify.Menu.Item) {
       new Spicetify.Menu.Item("Perf Adviser", false, openAdviser).register();
     }
+
+    // A saved bisect can be waiting for the user after a reload. Arm the
+    // reload-prompt guard now, before any Marketplace card is toggled.
+    if (shouldGuardReload()) ensureReloadGuard();
 
     window.__perfAdviser = {
       version: VERSION,
