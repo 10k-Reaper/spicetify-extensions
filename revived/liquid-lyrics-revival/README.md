@@ -33,6 +33,8 @@ In accordance with AGPL-3.0, the changes in this fork are marked here:
 - Folded the fork's standalone `scripts/verify-classic-script.mjs` guard into
   the repository-wide `scripts/validate-manifest.mjs` (Node `--check` plus
   `vm.Script`) and removed the duplicate script.
+- Replaced the Discord header button with a "Report an issue" button that
+  links to the host repository's Issues page.
 - Removed the upstream "SpotiKit move notice" modal and its
   `spotikit-move-notice-dismissed` localStorage key; this fork stays on
   Spicetify.
